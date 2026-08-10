@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>בדיקת תרגול קצר</title>
+<style>
+body{font-family:Arial,sans-serif;max-width:820px;margin:30px auto;padding:0 16px;background:#fafafa;text-align:right}
+.card{background:#fff;border:1px solid #ddd;border-radius:14px;padding:18px;margin:14px 0}
+input,button{font-size:16px;padding:10px;width:100%;box-sizing:border-box;margin:6px 0}
+nav a{margin-left:14px}
+.muted{color:#666}
+button{cursor:pointer}
+</style>
+</head>
+<body>
+<h1>בדיקת תרגול קצר</h1>
+<nav>
+<a href="index.html">הגשת עבודה</a>
+<a href="results.html">התוצאות שלי</a>
+<a href="teacher.html">מרצה</a>
+</nav>
+
+<div class="card">
+<h2>הגשת עבודה</h2>
+<p class="muted">אין צורך בשם. יש להשתמש בקוד אישי ובקוד PIN.</p>
+<input id="student_code" placeholder="קוד סטודנט, לדוגמה MATH-2741">
+<input id="pin" type="password" placeholder="קוד PIN">
+<input id="quiz_id" placeholder="מספר הבוחן, לדוגמה 1">
+<input id="file" type="file" accept=".png,.jpg,.jpeg,.pdf">
+<button id="submit">שליחה</button>
+<p id="status"></p>
+</div>
+
+<script>
+const API="REPLACE_WITH_BACKEND_URL";
+document.getElementById("submit").onclick=async()=>{
+  const s=document.getElementById("status");
+  const f=document.getElementById("file").files[0];
+  if(!f){s.textContent="יש לבחור קובץ.";return}
+  const fd=new FormData();
+  fd.append("student_code",document.getElementById("student_code").value.trim());
+  fd.append("pin",document.getElementById("pin").value);
+  fd.append("quiz_id",document.getElementById("quiz_id").value.trim());
+  fd.append("file",f);
+  s.textContent="שולח…";
+  try{
+    const r=await fetch(API+"/submit",{method:"POST",body:fd});
+    const d=await r.json();
+    s.textContent=r.ok?"העבודה התקבלה. מזהה: "+d.submission_id:(d.error||"אירעה שגיאה");
+  }catch(e){s.textContent="השרת עדיין לא מחובר."}
+};
+</script>
+</body>
+</html>

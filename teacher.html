@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>מרצה</title>
+<style>
+body{font-family:Arial,sans-serif;max-width:1000px;margin:30px auto;padding:0 16px;background:#fafafa;text-align:right}
+.card{background:#fff;border:1px solid #ddd;border-radius:14px;padding:18px;margin:14px 0}
+input,button,textarea{font-size:16px;padding:10px;width:100%;box-sizing:border-box;margin:6px 0}
+table{width:100%;border-collapse:collapse}
+td,th{padding:8px;border-bottom:1px solid #ddd;text-align:right}
+button{cursor:pointer}
+</style>
+</head>
+<body>
+<h1>מרצה</h1>
+<p><a href="index.html">← דף הבית</a></p>
+
+<div class="card">
+<h2>הנחיות לבדיקה</h2>
+<input id="teacher_key" type="password" placeholder="סיסמת מרצה">
+<input id="quiz_id" placeholder="מספר הבוחן">
+<textarea id="problem" rows="4" placeholder="נוסח השאלה"></textarea>
+<textarea id="rubric" rows="7" placeholder="פתרון נכון וחלוקת נקודות"></textarea>
+<button id="saveRubric">שמירת הנחיות</button>
+<p id="rubricStatus"></p>
+</div>
+
+<div class="card">
+<h2>עבודות</h2>
+<button id="load">רענון הרשימה</button>
+<div id="out"></div>
+</div>
+
+<script>
+const API="REPLACE_WITH_BACKEND_URL";
+const key=()=>document.getElementById("teacher_key").value;
+
+document.getElementById("saveRubric").onclick=async()=>{
+  const r=await fetch(API+"/teacher/rubric",{
+    method:"POST",
+    headers:{"Content-Type":"application/json","X-Teacher-Key":key()},
+    body:JSON.stringify({
+      quiz_id:document.getElementById("quiz_id").value.trim(),
+      problem:document.getElementById("problem").value,
+      rubric:document.getElementById("rubric").value
+    })
+  });
+  const d=await r.json();
+  document.getElementById("rubricStatus").textContent=r.ok?"נשמר":(d.error||"אירעה שגיאה");
+};
+
+document.getElementById("load").onclick=async()=>{
+  const out=document.getElementById("out");
+  try{
+    const r=await fetch(API+"/teacher/submissions",{headers:{"X-Teacher-Key":key()}});
+    const d=await r.json();
+    if(!r.ok){out.textContent=d.error||"אירעה שגיאה";return}
+    out.innerHTML=`<table><tr><th>קוד</th><th>בוחן</th><th>ציון</th><th>סטטוס</th></tr>`+
+      d.submissions.map(x=>`<tr><td>${x.student_code}</td><td>${x.quiz_id}</td><td>${x.score??""}</td><td>${x.status}</td></tr>`).join("")+
+      `</table>`;
+  }catch(e){out.textContent="השרת עדיין לא מחובר."}
+};
+</script>
+</body>
+</html>
