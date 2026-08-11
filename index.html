@@ -234,13 +234,19 @@ document.getElementById("submit").onclick = async () => {
 
 
     if (!saveResponse.ok) {
-      const errorText = await saveResponse.text();
-      console.error("Database error:", errorText);
+  const errorText = await saveResponse.text();
+  console.error("Database error:", errorText);
 
-      status.className = "error";
-      status.textContent = "שגיאה בשמירת ההגשה.";
-      return;
-    }
+  status.className = "error";
+
+  if (saveResponse.status === 409) {
+    status.textContent = "העבודה הזאת כבר הוגשה. לא ניתן להגיש אותה שוב.";
+  } else {
+    status.textContent = "שגיאה בשמירת ההגשה.";
+  }
+
+  return;
+}
 
 
     status.className = "success";
