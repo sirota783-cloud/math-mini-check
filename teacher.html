@@ -228,8 +228,7 @@ openButton.onclick = async () => {
       throw new Error(data.error || "Could not open file");
     }
 
-    window.open(data.signedUrl, "_blank");
-
+   showSubmission(data.signedUrl, row);
   } catch (e) {
     console.error(e);
     alert("שגיאה בפתיחת העבודה");
@@ -255,7 +254,34 @@ div.appendChild(openButton);
 
 };
 
+function showSubmission(url, row) {
+  const oldViewer = document.getElementById("submissionViewer");
+  if (oldViewer) oldViewer.remove();
 
+  const viewer = document.createElement("div");
+  viewer.id = "submissionViewer";
+  viewer.className = "card";
+
+  viewer.innerHTML = `
+    <h2>בדיקת עבודה</h2>
+    <p><strong>קוד סטודנט:</strong> ${escapeHtml(row.student_code || "")}</p>
+
+    <div style="text-align:center;">
+      <img src="${url}"
+           style="max-width:100%; height:auto; border:1px solid #ccc;">
+    </div>
+
+    <button type="button" id="closeSubmission">סגירה</button>
+  `;
+
+  document.body.appendChild(viewer);
+
+  document.getElementById("closeSubmission").onclick = () => {
+    viewer.remove();
+  };
+
+  viewer.scrollIntoView({ behavior: "smooth" });
+}
 function escapeHtml(value){
 
   return String(value)
