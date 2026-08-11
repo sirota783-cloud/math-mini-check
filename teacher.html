@@ -303,7 +303,42 @@ function showSubmission(url, row) {
   `;
 
   document.body.appendChild(viewer);
-document.getElementById("saveSubmissionReview").onclick = async () => {
+document.getElementById("aiCheckSubmission").onclick = async () => {
+  const status = document.getElementById("aiCheckStatus");
+  status.textContent = "AI בודק...";
+
+  try {
+    const r = await fetch(
+      SUPABASE_URL + "/functions/v1/ai-check-submission",
+      {
+        method: "POST",
+        headers: {
+          "apikey": SUPABASE_KEY,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          image_url: url,
+          quiz_id: row.quiz_id
+        })
+      }
+    );
+
+    const data = await r.json();
+
+    if (!r.ok) {
+      throw new Error(data.error || "AI check failed");
+    }
+
+    document.getElementById("submissionScore").value = data.score ?? "";
+    document.getElementById("submissionFeedback").value = data.feedback ?? "";
+    status.textContent = "בדיקת AI הסתיימה";
+
+  } catch (e) {
+    console.error(e);
+    status.textContent = "שגיאה בבדיקת AI";
+  }
+};
+  document.getElementById("saveSubmissionReview").onclick = async () => {
   const score = document.getElementById("submissionScore").value.trim();
   const feedback = document.getElementById("submissionFeedback").value.trim();
 
