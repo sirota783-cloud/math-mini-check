@@ -199,7 +199,47 @@ document.getElementById("load").onclick = async () => {
         ${escapeHtml(row.feedback || "")}
         </p>
       `;
+const openButton = document.createElement("button");
+openButton.textContent = "פתיחת העבודה";
 
+openButton.onclick = async () => {
+  try {
+    openButton.disabled = true;
+    openButton.textContent = "פותח...";
+
+    const r = await fetch(
+      SUPABASE_URL + "/functions/v1/teacher-submissions",
+      {
+        method: "POST",
+        headers: {
+          "apikey": SUPABASE_KEY,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          teacher_password: password,
+          file_path: row.file_path
+        })
+      }
+    );
+
+    const data = await r.json();
+
+    if (!r.ok || !data.signedUrl) {
+      throw new Error(data.error || "Could not open file");
+    }
+
+    window.open(data.signedUrl, "_blank");
+
+  } catch (e) {
+    console.error(e);
+    alert("שגיאה בפתיחת העבודה");
+  } finally {
+    openButton.disabled = false;
+    openButton.textContent = "פתיחת העבודה";
+  }
+};
+
+div.appendChild(openButton);
       works.appendChild(div);
     });
 
