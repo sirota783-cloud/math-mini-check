@@ -317,7 +317,7 @@ document.getElementById("saveSubmissionReview").onclick = async () => {
     },
     body: JSON.stringify({
       action: "save",
-      teacher_password: password,
+     teacher_password: document.getElementById("teacher_password").value.trim(),
       submission_id: row.id,
       score: Number(score),
       feedback: feedback
