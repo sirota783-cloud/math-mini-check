@@ -1,67 +1,232 @@
 <!doctype html>
 <html lang="he" dir="rtl">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>מרצה</title>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>מרצה — בדיקת תרגול קצר</title>
+
 <style>
-body{font-family:Arial,sans-serif;max-width:1000px;margin:30px auto;padding:0 16px;background:#fafafa;text-align:right}
-.card{background:#fff;border:1px solid #ddd;border-radius:14px;padding:18px;margin:14px 0}
-input,button,textarea{font-size:16px;padding:10px;width:100%;box-sizing:border-box;margin:6px 0}
-table{width:100%;border-collapse:collapse}
-td,th{padding:8px;border-bottom:1px solid #ddd;text-align:right}
+body{
+  font-family:Arial,sans-serif;
+  max-width:1000px;
+  margin:30px auto;
+  padding:16px;
+  background:#fafafa;
+  text-align:right;
+}
+
+.card{
+  background:white;
+  border:1px solid #ddd;
+  border-radius:14px;
+  padding:18px;
+  margin:14px 0;
+}
+
+input,textarea,button{
+  font-size:16px;
+  padding:10px;
+  width:100%;
+  box-sizing:border-box;
+  margin:6px 0;
+}
+
 button{cursor:pointer}
+
+table{
+  width:100%;
+  border-collapse:collapse;
+  margin-top:15px;
+}
+
+th,td{
+  border-bottom:1px solid #ddd;
+  padding:9px;
+  text-align:right;
+}
+
+.error{
+  color:#a00;
+  font-weight:bold;
+}
+
+.success{
+  color:#087a20;
+  font-weight:bold;
+}
+
+.muted{
+  color:#666;
+}
+
+.work{
+  border:1px solid #ddd;
+  border-radius:10px;
+  padding:14px;
+  margin-top:12px;
+}
 </style>
 </head>
+
 <body>
+
 <h1>מרצה</h1>
-<p><a href="index.html">← דף הבית</a></p>
+
+<p>
+<a href="index.html">← חזרה לדף ההגשה</a>
+</p>
 
 <div class="card">
-<h2>הנחיות לבדיקה</h2>
-<input id="teacher_key" type="password" placeholder="סיסמת מרצה">
-<input id="quiz_id" placeholder="מספר הבוחן">
-<textarea id="problem" rows="4" placeholder="נוסח השאלה"></textarea>
-<textarea id="rubric" rows="7" placeholder="פתרון נכון וחלוקת נקודות"></textarea>
-<button id="saveRubric">שמירת הנחיות</button>
-<p id="rubricStatus"></p>
+
+<h2>כניסת מרצה</h2>
+
+<input
+  id="teacher_password"
+  type="password"
+  placeholder="סיסמת מרצה"
+>
+
+<button id="load">הצגת עבודות</button>
+
+<p id="status"></p>
+
 </div>
 
-<div class="card">
-<h2>עבודות</h2>
-<button id="load">רענון הרשימה</button>
-<div id="out"></div>
-</div>
+<div id="works"></div>
 
 <script>
-const API="REPLACE_WITH_BACKEND_URL";
-const key=()=>document.getElementById("teacher_key").value;
 
-document.getElementById("saveRubric").onclick=async()=>{
-  const r=await fetch(API+"/teacher/rubric",{
-    method:"POST",
-    headers:{"Content-Type":"application/json","X-Teacher-Key":key()},
-    body:JSON.stringify({
-      quiz_id:document.getElementById("quiz_id").value.trim(),
-      problem:document.getElementById("problem").value,
-      rubric:document.getElementById("rubric").value
-    })
-  });
-  const d=await r.json();
-  document.getElementById("rubricStatus").textContent=r.ok?"נשמר":(d.error||"אירעה שגיאה");
-};
+const SUPABASE_URL =
+  "https://bthkzkdsijnhuvnewzuj.supabase.co";
 
-document.getElementById("load").onclick=async()=>{
-  const out=document.getElementById("out");
+const SUPABASE_KEY =
+  "sb_publishable_gsoH21Rei_f5rQyrjXyXPQ_8oI8LKR0";
+
+
+document.getElementById("load").onclick = async () => {
+
+  const password =
+    document.getElementById("teacher_password").value.trim();
+
+  const status =
+    document.getElementById("status");
+
+  const works =
+    document.getElementById("works");
+
+  works.innerHTML = "";
+  status.textContent = "";
+  status.className = "";
+
+  if(!password){
+    status.className = "error";
+    status.textContent = "יש להזין סיסמת מרצה.";
+    return;
+  }
+
   try{
-    const r=await fetch(API+"/teacher/submissions",{headers:{"X-Teacher-Key":key()}});
-    const d=await r.json();
-    if(!r.ok){out.textContent=d.error||"אירעה שגיאה";return}
-    out.innerHTML=`<table><tr><th>קוד</th><th>בוחן</th><th>ציון</th><th>סטטוס</th></tr>`+
-      d.submissions.map(x=>`<tr><td>${x.student_code}</td><td>${x.quiz_id}</td><td>${x.score??""}</td><td>${x.status}</td></tr>`).join("")+
-      `</table>`;
-  }catch(e){out.textContent="השרת עדיין לא מחובר."}
+
+    status.textContent = "טוען עבודות...";
+
+    const response = await fetch(
+      SUPABASE_URL + "/rest/v1/rpc/get_teacher_submissions",
+      {
+        method:"POST",
+
+        headers:{
+          "apikey":SUPABASE_KEY,
+          "Authorization":"Bearer " + SUPABASE_KEY,
+          "Content-Type":"application/json"
+        },
+
+        body:JSON.stringify({
+          p_teacher_password:password
+        })
+      }
+    );
+
+    if(!response.ok){
+      const t = await response.text();
+      console.error(t);
+
+      status.className = "error";
+      status.textContent =
+        "שגיאה בכניסה או בקבלת העבודות.";
+      return;
+    }
+
+    const rows = await response.json();
+
+    if(rows.length === 0){
+      status.textContent = "לא נמצאו עבודות.";
+      return;
+    }
+
+    status.className = "success";
+    status.textContent =
+      "נמצאו " + rows.length + " עבודות.";
+
+    rows.forEach(row => {
+
+      const div = document.createElement("div");
+      div.className = "card";
+
+      div.innerHTML = `
+        <h3>בוחן ${escapeHtml(row.quiz_id || "")}</h3>
+
+        <p>
+        <strong>קוד סטודנט:</strong>
+        ${escapeHtml(row.student_code || "")}
+        </p>
+
+        <p>
+        <strong>סטטוס:</strong>
+        ${escapeHtml(row.status || "")}
+        </p>
+
+        <p>
+        <strong>קובץ:</strong>
+        ${escapeHtml(row.file_path || "")}
+        </p>
+
+        <p>
+        <strong>ציון:</strong>
+        ${row.score == null ? "טרם נבדק" : escapeHtml(String(row.score))}
+        </p>
+
+        <p>
+        <strong>הערה:</strong>
+        ${escapeHtml(row.feedback || "")}
+        </p>
+      `;
+
+      works.appendChild(div);
+    });
+
+  }
+  catch(e){
+
+    console.error(e);
+
+    status.className = "error";
+    status.textContent = "שגיאת תקשורת.";
+
+  }
+
 };
+
+
+function escapeHtml(value){
+
+  return String(value)
+    .replaceAll("&","&amp;")
+    .replaceAll("<","&lt;")
+    .replaceAll(">","&gt;")
+    .replaceAll('"',"&quot;")
+    .replaceAll("'","&#039;");
+}
+
 </script>
+
 </body>
 </html>
