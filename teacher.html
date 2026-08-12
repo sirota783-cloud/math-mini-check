@@ -282,12 +282,12 @@ function showSubmission(url, row) {
       >
 
       <label><strong>הערה:</strong></label>
-      <textarea
-        id="submissionFeedback"
-        dir="auto"
-        rows="4"
-        placeholder="כתוב הערה לסטודנט"
-      ></textarea>
+      <div
+  id="submissionFeedback"
+  contenteditable="true"
+  dir="rtl"
+  style="min-height:80px; border:1px solid #aaa; padding:8px; white-space:pre-wrap;"
+></div>
 
     <button type="button" id="saveSubmissionReview">
   שמירת בדיקה
@@ -331,7 +331,19 @@ document.getElementById("aiCheckSubmission").onclick = async () => {
     }
 
     document.getElementById("submissionScore").value = data.score ?? "";
-    document.getElementById("submissionFeedback").value = data.feedback ?? "";
+  const feedbackBox = document.getElementById("submissionFeedback");
+const feedbackText = data.feedback ?? "";
+
+feedbackBox.innerHTML = feedbackText
+  .split(/(\[\[.*?\]\])/g)
+  .map(part => {
+    if (part.startsWith("[[") && part.endsWith("]]")) {
+      const formula = part.slice(2, -2);
+      return `<span dir="ltr" style="display:inline-block;">${escapeHtml(formula)}</span>`;
+    }
+    return escapeHtml(part);
+  })
+  .join(""); 
     status.textContent = "בדיקת AI הסתיימה";
 
   } catch (e) {
@@ -341,8 +353,7 @@ document.getElementById("aiCheckSubmission").onclick = async () => {
 };
   document.getElementById("saveSubmissionReview").onclick = async () => {
   const score = document.getElementById("submissionScore").value.trim();
-  const feedback = document.getElementById("submissionFeedback").value.trim();
-
+  const feedback = document.getElementById("submissionFeedback").innerText.trim();
   if (score === "" || Number(score) < 0 || Number(score) > 100) {
     alert("יש להזין ציון בין 0 ל-100");
     return;
