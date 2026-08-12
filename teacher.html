@@ -346,11 +346,14 @@ feedbackBox.innerHTML = feedbackText
   .map(part => {
     if (part.startsWith("[[") && part.endsWith("]]")) {
       const formula = part.slice(2, -2);
-      return `<span dir="ltr" style="display:inline-block;">${escapeHtml(formula)}</span>`;
+      return `<span dir="ltr" style="display:inline-block;">\\(${escapeHtml(formula)}\\)</span>`;
     }
     return escapeHtml(part);
   })
   .join(""); 
+   if (window.MathJax?.typesetPromise) {
+  await MathJax.typesetPromise([feedbackBox]);
+}
     status.textContent = "בדיקת AI הסתיימה";
 
   } catch (e) {
