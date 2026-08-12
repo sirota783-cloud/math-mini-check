@@ -345,7 +345,7 @@ feedbackBox.innerHTML = feedbackText
   .split(/(\[\[.*?\]\])/g)
   .map(part => {
     if (part.startsWith("[[") && part.endsWith("]]")) {
-      const formula = part.slice(2, -2);
+     const formula = part.slice(2, -2).trim().replace(/^\$+|\$+$/g, "");
       return `<span dir="ltr" style="display:inline-block;">\\(${escapeHtml(formula)}\\)</span>`;
     }
     return escapeHtml(part);
