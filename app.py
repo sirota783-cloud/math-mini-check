@@ -831,6 +831,64 @@ def teacher_file_url():
         return jsonify(error="Could not create signed URL"), 500
 
     return jsonify(signedUrl=signed_url)
+@app.post("/teacher/exam-upload")
+def teacher_exam_upload():
+
+    teacher_password = request.form.get("teacher_password", "").strip()
+    exam_code = request.form.get("exam_code", "").strip()
+    file = request.files.get("file")
+
+    if not teacher_password:
+        return jsonify(error="Missing teacher password"), 400
+
+    if not exam_code:
+        return jsonify(error="Missing exam code"), 400
+
+    if not file:
+        return jsonify(error="Missing exam file"), 400
+
+    # Проверяем пароль преподавателя
+    try:
+        sb.rpc(
+            "get_teacher_submissions",
+            {"p_teacher_password": teacher_password}
+        ).execute()
+    except Exception:
+        return jsonify(error="Invalid teacher password"), 403
+
+    try:
+        file_bytes = file.read()
+
+        extension = os.path.splitext(file.filename)[1].lower()
+
+        if extension not in [".pdf", ".png", ".jpg", ".jpeg"]:
+            return jsonify(error="Unsupported file type"), 400
+
+        file_path = (
+            "exams/"
+            + exam_code
+            + "/questions"
+            + extension
+        )
+
+        sb.storage.from_("submissions").upload(
+            file_path,
+            file_bytes,
+            {
+                "content-type": file.content_type,
+                "upsert": "true"
+            }
+        )
+
+        return jsonify(
+            success=True,
+            exam_code=exam_code,
+            file_path=file_path
+        )
+
+    except Exception as e:
+        print("EXAM UPLOAD ERROR:", e)
+        return jsonify(error=str(e)), 500
 # ==========================================================
 # START
 # ==========================================================
