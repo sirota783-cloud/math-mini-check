@@ -214,20 +214,19 @@ openButton.onclick = async () => {
     openButton.disabled = true;
     openButton.textContent = "פותח...";
 
-    const r = await fetch(
-      SUPABASE_URL + "/functions/v1/teacher-submissions",
-      {
-        method: "POST",
-        headers: {
-          "apikey": SUPABASE_KEY,
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({
-          teacher_password: password,
-          file_path: row.file_path
-        })
-      }
-    );
+   const r = await fetch(
+  "https://math-mini-check.onrender.com/teacher/file-url",
+  {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      teacher_password: password,
+      file_path: row.file_path
+    })
+  }
+);
 
     const data = await r.json();
 
