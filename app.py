@@ -484,7 +484,73 @@ def teacher_page():
 # ==========================================================
 # STUDENT SUBMISSION
 # ==========================================================
+@app.get("/student")
+def student_page():
+    return """
+    <!doctype html>
+    <html lang="en">
+    <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <title>Math Control Test</title>
+        <style>
+            body {
+                font-family: Arial, sans-serif;
+                max-width: 700px;
+                margin: 40px auto;
+                padding: 0 20px;
+            }
+            input, button {
+                font-size: 16px;
+                margin: 8px 0;
+                padding: 8px;
+            }
+            input {
+                width: 100%;
+                box-sizing: border-box;
+            }
+        </style>
+    </head>
+    <body>
 
+        <h1>Math Control Test</h1>
+
+        <form method="post"
+              action="/submit"
+              enctype="multipart/form-data">
+
+            <label>Student code</label>
+            <input type="text"
+                   name="student_code"
+                   required>
+
+            <label>PIN</label>
+            <input type="password"
+                   name="pin"
+                   required>
+
+            <label>Quiz ID</label>
+            <input type="text"
+                   name="quiz_id"
+                   required>
+
+            <label>Upload handwritten solution</label>
+            <input type="file"
+                   name="file"
+                   accept="image/*,application/pdf"
+                   required>
+
+            <br>
+
+            <button type="submit">
+                Submit solution
+            </button>
+
+        </form>
+
+    </body>
+    </html>
+    """
 @app.post("/submit")
 def submit():
 
