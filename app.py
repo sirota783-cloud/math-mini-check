@@ -796,14 +796,24 @@ def submissions():
     )
 @app.post("/teacher/file-url")
 def teacher_file_url():
-    if not teacher_ok():
-        return jsonify(error="Forbidden"), 403
-
     d = request.get_json(force=True)
+
+    teacher_password = d.get("teacher_password", "").strip()
     file_path = d.get("file_path", "").strip()
+
+    if not teacher_password:
+        return jsonify(error="Missing teacher password"), 400
 
     if not file_path:
         return jsonify(error="Missing file_path"), 400
+
+    try:
+        sb.rpc(
+            "get_teacher_submissions",
+            {"p_teacher_password": teacher_password}
+        ).execute()
+    except Exception:
+        return jsonify(error="Invalid teacher password"), 403
 
     result = (
         sb.storage
@@ -821,7 +831,6 @@ def teacher_file_url():
         return jsonify(error="Could not create signed URL"), 500
 
     return jsonify(signedUrl=signed_url)
-
 # ==========================================================
 # START
 # ==========================================================
