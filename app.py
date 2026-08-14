@@ -623,7 +623,7 @@ def submit():
 
 
     sb.table(
-        "submissions"
+      "mini_check_submissions"
     ).insert({
         "id":
             sid,
@@ -681,7 +681,7 @@ def results():
 
 
     rows = (
-        sb.table("submissions")
+        sb.table("mini_check_submissions")
         .select(
             "quiz_id,"
             "score,"
@@ -772,7 +772,7 @@ def submissions():
 
 
     rows = (
-        sb.table("submissions")
+        sb.table("mini_check_submissions")
         .select(
             "id,"
             "student_code,"
