@@ -794,7 +794,33 @@ def submissions():
     return jsonify(
         submissions=rows
     )
+@app.post("/teacher/file-url")
+def teacher_file_url():
+    if not teacher_ok():
+        return jsonify(error="Forbidden"), 403
 
+    d = request.get_json(force=True)
+    file_path = d.get("file_path", "").strip()
+
+    if not file_path:
+        return jsonify(error="Missing file_path"), 400
+
+    result = (
+        sb.storage
+        .from_("submissions")
+        .create_signed_url(file_path, 300)
+    )
+
+    signed_url = (
+        result.get("signedURL")
+        or result.get("signedUrl")
+        or result.get("signed_url")
+    )
+
+    if not signed_url:
+        return jsonify(error="Could not create signed URL"), 500
+
+    return jsonify(signedUrl=signed_url)
 
 # ==========================================================
 # START
