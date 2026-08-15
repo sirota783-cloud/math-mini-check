@@ -1,6 +1,7 @@
 import os
 import hashlib
 import uuid
+import json
 
 from flask import Flask, request, jsonify, render_template_string
 from flask_cors import CORS
@@ -554,104 +555,67 @@ def student_page():
 @app.post("/submit")
 def submit():
 
-    code = request.form.get(
-        "student_code",
-        ""
-    ).strip()
+    code = request.form.get("student_code", "").strip()
+    pin = request.form.get("pin", "")
+    quiz_id = request.form.get("quiz_id", "").strip()
 
-    pin = request.form.get(
-        "pin",
-        ""
-    )
+    files = request.files.getlist("files")
+    files = [f for f in files if f and f.filename]
 
-    quiz_id = request.form.get(
-        "quiz_id",
-        ""
-    ).strip()
+    if not code or not pin or not quiz_id or not files:
+        return jsonify(error="חסרים שדות חובה"), 400
 
-    f = request.files.get(
-        "file"
-    )
+    allowed = {".png", ".jpg", ".jpeg"}
 
+    for f in files:
+        ext = os.path.splitext(f.filename)[1].lower()
+        if ext not in allowed:
+            return jsonify(error="ניתן להעלות רק קבצי PNG או JPG"), 400
 
-    if (
-        not code
-        or not pin
-        or not quiz_id
-        or not f
-    ):
-        return jsonify(
-            error="חסרים שדות חובה"
-        ), 400
+    sid = str(uuid.uuid4())
+    uploaded_paths = []
 
+    try:
+        for index, f in enumerate(files, start=1):
+            ext = os.path.splitext(f.filename)[1].lower()
+            path = f"{code}/{quiz_id}/{sid}/{index:03d}{ext}"
+            content = f.read()
 
-    sid = str(
-        uuid.uuid4()
-    )
+            sb.storage.from_("mini-check-files").upload(
+                path,
+                content,
+                {
+                    "content-type": f.mimetype or "application/octet-stream",
+                    "upsert": "false"
+                }
+            )
+            uploaded_paths.append(path)
 
+        sb.table("mini_check_submissions").insert({
+            "id": sid,
+            "student_code": code,
+            "pin_hash": phash(code, pin),
+            "quiz_id": quiz_id,
+            "file_path": json.dumps(uploaded_paths, ensure_ascii=False),
+            "status": "submitted"
+        }).execute()
 
-    ext = (
-        os.path.splitext(
-            f.filename
-        )[1].lower()
-        or ".bin"
-    )
+        return jsonify(submission_id=sid, files=len(uploaded_paths))
 
+    except Exception as e:
+        print("SUBMIT ERROR:", e)
 
-    path = (
-        f"{quiz_id}/"
-        f"{sid}{ext}"
-    )
+        for path in uploaded_paths:
+            try:
+                sb.storage.from_("mini-check-files").remove([path])
+            except Exception:
+                pass
 
+        message = str(e).lower()
+        if "duplicate" in message or "unique" in message or "23505" in message:
+            return jsonify(error="העבודה הזאת כבר הוגשה"), 409
 
-    content = f.read()
-
-
-    sb.storage.from_(
-        "submissions"
-    ).upload(
-        path,
-        content,
-        {
-            "content-type":
-                f.mimetype,
-
-            "upsert":
-                "false"
-        }
-    )
-
-
-    sb.table(
-      "mini_check_submissions"
-    ).insert({
-        "id":
-            sid,
-
-        "student_code":
-            code,
-
-        "pin_hash":
-            phash(
-                code,
-                pin
-            ),
-
-        "quiz_id":
-            quiz_id,
-
-        "file_path":
-            path,
-
-        "status":
-            "submitted"
-    }).execute()
-
-
-    return jsonify(
-        submission_id=sid
-    )
-
+        return jsonify(error="שגיאה בשמירת ההגשה"), 500
 
 # ==========================================================
 # STUDENT RESULTS
@@ -799,12 +763,12 @@ def teacher_file_url():
     d = request.get_json(force=True)
 
     teacher_password = d.get("teacher_password", "").strip()
-    file_path = d.get("file_path", "").strip()
+    raw_file_path = d.get("file_path", "")
 
     if not teacher_password:
         return jsonify(error="Missing teacher password"), 400
 
-    if not file_path:
+    if raw_file_path is None or str(raw_file_path).strip() == "":
         return jsonify(error="Missing file_path"), 400
 
     try:
@@ -815,22 +779,45 @@ def teacher_file_url():
     except Exception:
         return jsonify(error="Invalid teacher password"), 403
 
-    result = (
-        sb.storage
-        .from_("mini-check-files")
-        .create_signed_url(file_path, 300)
-    )
+    # New submissions store a JSON array of paths.
+    # Old submissions may contain a single plain path.
+    if isinstance(raw_file_path, list):
+        paths = raw_file_path
+    else:
+        text = str(raw_file_path).strip()
+        try:
+            parsed = json.loads(text)
+            paths = parsed if isinstance(parsed, list) else [parsed]
+        except Exception:
+            paths = [text]
 
-    signed_url = (
-        result.get("signedURL")
-        or result.get("signedUrl")
-        or result.get("signed_url")
-    )
+    paths = [str(p).strip() for p in paths if str(p).strip()]
 
-    if not signed_url:
-        return jsonify(error="Could not create signed URL"), 500
+    if not paths:
+        return jsonify(error="No files found"), 400
 
-    return jsonify(signedUrl=signed_url)
+    signed_urls = []
+
+    for path in paths:
+        result = (
+            sb.storage
+            .from_("mini-check-files")
+            .create_signed_url(path, 900)
+        )
+
+        signed_url = (
+            result.get("signedURL")
+            or result.get("signedUrl")
+            or result.get("signed_url")
+        )
+
+        if not signed_url:
+            return jsonify(error="Could not create signed URL"), 500
+
+        signed_urls.append(signed_url)
+
+    return jsonify(signedUrls=signed_urls)
+
 @app.post("/teacher/exam-upload")
 def teacher_exam_upload():
 
