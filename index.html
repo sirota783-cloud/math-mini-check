@@ -96,8 +96,13 @@ nav a {
 <input
   id="file"
   type="file"
-  accept=".png,.jpg,.jpeg,.pdf"
+  accept=".png,.jpg,.jpeg"
+  multiple
 >
+
+<p class="muted">
+ניתן לבחור מספר תמונות יחד.
+</p>
 
 <button id="submit">שליחה</button>
 
@@ -134,80 +139,111 @@ document.getElementById("submit").onclick = async () => {
   const quizId =
     document.getElementById("quiz_id").value.trim();
 
-  const file =
-    document.getElementById("file").files[0];
+  const files =
+    Array.from(document.getElementById("file").files);
 
 
   status.className = "";
   status.textContent = "";
 
 
-  if (!studentCode || !pin || !quizId || !file) {
+  if (!studentCode || !pin || !quizId || files.length === 0) {
     status.className = "error";
-    status.textContent = "יש למלא את כל השדות ולבחור קובץ.";
+    status.textContent =
+      "יש למלא את כל השדות ולבחור לפחות תמונה אחת.";
     return;
   }
 
 
   try {
 
-    status.textContent = "מעלה את הקובץ...";
+    const uploadedPaths = [];
 
 
-    const fileName = safeFileName(file.name);
+    /* 1. Upload all images to Supabase Storage */
 
-    const filePath =
-      studentCode + "/" +
-      quizId + "/" +
-      Date.now() + "-" +
-      fileName;
+    for (let i = 0; i < files.length; i++) {
+
+      const file = files[i];
+
+      const fileName =
+        safeFileName(file.name);
+
+      const filePath =
+        studentCode + "/" +
+        quizId + "/" +
+        Date.now() + "-" +
+        (i + 1) + "-" +
+        fileName;
 
 
-    const encodedPath =
-      filePath
-        .split("/")
-        .map(encodeURIComponent)
-        .join("/");
+      const encodedPath =
+        filePath
+          .split("/")
+          .map(encodeURIComponent)
+          .join("/");
 
 
-    /* 1. Upload actual file to Supabase Storage */
+      status.textContent =
+        "מעלה תמונה " +
+        (i + 1) +
+        " מתוך " +
+        files.length +
+        "...";
 
-    const uploadResponse = await fetch(
-      SUPABASE_URL +
-      "/storage/v1/object/" +
-      BUCKET +
-      "/" +
-      encodedPath,
-      {
-        method: "POST",
 
-        headers: {
-          "apikey": SUPABASE_KEY,
-          "Authorization": "Bearer " + SUPABASE_KEY,
-          "Content-Type":
-            file.type || "application/octet-stream",
-          "x-upsert": "false"
-        },
+      const uploadResponse = await fetch(
+        SUPABASE_URL +
+        "/storage/v1/object/" +
+        BUCKET +
+        "/" +
+        encodedPath,
+        {
+          method: "POST",
 
-        body: file
+          headers: {
+            "apikey": SUPABASE_KEY,
+            "Authorization": "Bearer " + SUPABASE_KEY,
+            "Content-Type":
+              file.type || "application/octet-stream",
+            "x-upsert": "false"
+          },
+
+          body: file
+        }
+      );
+
+
+      if (!uploadResponse.ok) {
+
+        const errorText =
+          await uploadResponse.text();
+
+        console.error(
+          "Storage error:",
+          errorText
+        );
+
+        status.className = "error";
+
+        status.textContent =
+          "שגיאה בהעלאת תמונה " +
+          (i + 1) +
+          ".";
+
+        return;
       }
-    );
 
 
-    if (!uploadResponse.ok) {
-      const errorText = await uploadResponse.text();
-      console.error("Storage error:", errorText);
-
-      status.className = "error";
-      status.textContent = "שגיאה בהעלאת הקובץ.";
-      return;
+      uploadedPaths.push(filePath);
     }
 
 
-    status.textContent = "שומר את ההגשה...";
+    status.textContent =
+      "שומר את ההגשה...";
 
 
-    /* 2. Save submission information */
+    /* 2. Save one submission containing all image paths */
 
     const saveResponse = await fetch(
       SUPABASE_URL +
@@ -217,8 +253,10 @@ document.getElementById("submit").onclick = async () => {
 
         headers: {
           "apikey": SUPABASE_KEY,
-          "Authorization": "Bearer " + SUPABASE_KEY,
-          "Content-Type": "application/json",
+          "Authorization":
+            "Bearer " + SUPABASE_KEY,
+          "Content-Type":
+            "application/json",
           "Prefer": "return=minimal"
         },
 
@@ -226,7 +264,8 @@ document.getElementById("submit").onclick = async () => {
           student_code: studentCode,
           pin_hash: pin,
           quiz_id: quizId,
-          file_path: filePath,
+          file_path:
+            JSON.stringify(uploadedPaths),
           status: "submitted"
         })
       }
@@ -234,23 +273,32 @@ document.getElementById("submit").onclick = async () => {
 
 
     if (!saveResponse.ok) {
-  const errorText = await saveResponse.text();
-  console.error("Database error:", errorText);
 
-  status.className = "error";
+      const errorText =
+        await saveResponse.text();
 
-  if (saveResponse.status === 409) {
-    status.textContent = "העבודה הזאת כבר הוגשה. לא ניתן להגיש אותה שוב.";
-  } else {
-    status.textContent = "שגיאה בשמירת ההגשה.";
-  }
+      console.error(
+        "Database error:",
+        errorText
+      );
 
-  return;
-}
+      status.className = "error";
+
+      if (saveResponse.status === 409) {
+        status.textContent =
+          "העבודה הזאת כבר הוגשה. לא ניתן להגיש אותה שוב.";
+      } else {
+        status.textContent =
+          "שגיאה בשמירת ההגשה.";
+      }
+
+      return;
+    }
 
 
     status.className = "success";
-    status.textContent = "העבודה נשלחה בהצלחה.";
+    status.textContent =
+      "העבודה נשלחה בהצלחה.";
 
     document.getElementById("file").value = "";
     document.getElementById("quiz_id").value = "";
@@ -262,7 +310,8 @@ document.getElementById("submit").onclick = async () => {
     console.error(error);
 
     status.className = "error";
-    status.textContent = "שגיאת תקשורת.";
+    status.textContent =
+      "שגיאת תקשורת.";
 
   }
 
