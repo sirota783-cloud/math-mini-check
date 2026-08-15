@@ -817,7 +817,7 @@ def teacher_file_url():
 
     result = (
         sb.storage
-        .from_("submissions")
+        .from_("mini-check-files")
         .create_signed_url(file_path, 300)
     )
 
