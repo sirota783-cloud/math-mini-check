@@ -942,7 +942,12 @@ function showSubmission(
 
       viewer.remove();
 
-      document.getElementById("load").click();
+      await document.getElementById("load").onclick();
+
+      window.scrollTo({
+        top: 0,
+        behavior: "smooth"
+      });
 
     }
 
