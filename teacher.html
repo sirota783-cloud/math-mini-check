@@ -160,55 +160,236 @@ const SUPABASE_URL =
 const SUPABASE_KEY =
   "sb_publishable_gsoH21Rei_f5rQyrjXyXPQ_8oI8LKR0";
 
+const FILE_URL_ENDPOINT =
+  "https://math-mini-check.onrender.com/teacher/file-url";
+
+
+function normalizeQuizId(value) {
+
+  const q =
+    String(value ?? "").trim();
+
+  if (
+    q === "1" ||
+    /^\.+$/.test(q)
+  ) {
+    return "1";
+  }
+
+  return q;
+}
+
+
+function buildSubmissionGroups(rows) {
+
+  const groups =
+    new Map();
+
+  for (const row of rows) {
+
+    const studentCode =
+      String(row.student_code ?? "").trim();
+
+    const quizId =
+      normalizeQuizId(row.quiz_id);
+
+    const key =
+      studentCode + "||" + quizId;
+
+    if (!groups.has(key)) {
+
+      groups.set(key, {
+        student_code: studentCode,
+        quiz_id: quizId,
+        rows: []
+      });
+
+    }
+
+    groups.get(key).rows.push(row);
+  }
+
+  return Array.from(groups.values());
+}
+
+
+function groupScoreText(group) {
+
+  const scores =
+    group.rows
+      .map(row => row.score)
+      .filter(score => score !== null && score !== undefined);
+
+  if (scores.length === 0) {
+    return "טרם נבדק";
+  }
+
+  const uniqueScores =
+    [...new Set(scores.map(Number))];
+
+  if (
+    scores.length === group.rows.length &&
+    uniqueScores.length === 1
+  ) {
+    return String(uniqueScores[0]);
+  }
+
+  if (uniqueScores.length === 1) {
+    return String(uniqueScores[0]) + " (חלק מההגשות)";
+  }
+
+  return "יש ציונים שונים בין חלקי ההגשה";
+}
+
+
+function groupFeedbackText(group) {
+
+  const feedbacks =
+    group.rows
+      .map(row => String(row.feedback ?? "").trim())
+      .filter(Boolean);
+
+  if (feedbacks.length === 0) {
+    return "";
+  }
+
+  const unique =
+    [...new Set(feedbacks)];
+
+  if (unique.length === 1) {
+    return unique[0];
+  }
+
+  return "קיימות הערות שונות בין חלקי ההגשה";
+}
+
+
+async function getSignedUrlsForGroup(
+  group,
+  password
+) {
+
+  const allUrls = [];
+
+  for (const sourceRow of group.rows) {
+
+    const r = await fetch(
+      FILE_URL_ENDPOINT,
+      {
+        method: "POST",
+
+        headers: {
+          "Content-Type": "application/json"
+        },
+
+        body: JSON.stringify({
+          teacher_password: password,
+          file_path: sourceRow.file_path
+        })
+      }
+    );
+
+    let data = {};
+
+    try {
+      data = await r.json();
+    } catch (_) {}
+
+    if (
+      !r.ok ||
+      !Array.isArray(data.signedUrls) ||
+      data.signedUrls.length === 0
+    ) {
+
+      throw new Error(
+        data.error ||
+        "Could not open files"
+      );
+    }
+
+    allUrls.push(
+      ...data.signedUrls
+    );
+  }
+
+  return [
+    ...new Set(allUrls)
+  ];
+}
+
 
 document.getElementById("load").onclick = async () => {
 
   const password =
-    document.getElementById("teacher_password").value.trim();
+    document.getElementById(
+      "teacher_password"
+    ).value.trim();
 
   const status =
-    document.getElementById("status");
+    document.getElementById(
+      "status"
+    );
 
   const works =
-    document.getElementById("works");
+    document.getElementById(
+      "works"
+    );
 
   works.innerHTML = "";
   status.textContent = "";
   status.className = "";
 
-  if(!password){
-    status.className = "error";
-    status.textContent = "יש להזין סיסמת מרצה.";
+  if (!password) {
+
+    status.className =
+      "error";
+
+    status.textContent =
+      "יש להזין סיסמת מרצה.";
+
     return;
   }
 
-  try{
+  try {
 
-    status.textContent = "טוען עבודות...";
+    status.textContent =
+      "טוען עבודות...";
 
-    const response = await fetch(
-      SUPABASE_URL + "/rest/v1/rpc/get_teacher_submissions",
-      {
-        method:"POST",
+    const response =
+      await fetch(
+        SUPABASE_URL +
+        "/rest/v1/rpc/get_teacher_submissions",
+        {
+          method: "POST",
 
-        headers:{
-          "apikey":SUPABASE_KEY,
-          "Authorization":"Bearer " + SUPABASE_KEY,
-          "Content-Type":"application/json"
-        },
+          headers: {
+            "apikey":
+              SUPABASE_KEY,
 
-        body:JSON.stringify({
-          p_teacher_password:password
-        })
-      }
-    );
+            "Authorization":
+              "Bearer " + SUPABASE_KEY,
 
-    if(!response.ok){
+            "Content-Type":
+              "application/json"
+          },
 
-      const t = await response.text();
+          body:
+            JSON.stringify({
+              p_teacher_password:
+                password
+            })
+        }
+      );
+
+    if (!response.ok) {
+
+      const t =
+        await response.text();
+
       console.error(t);
 
-      status.className = "error";
+      status.className =
+        "error";
 
       status.textContent =
         "שגיאה בכניסה או בקבלת העבודות.";
@@ -216,9 +397,10 @@ document.getElementById("load").onclick = async () => {
       return;
     }
 
-    const rows = await response.json();
+    const rows =
+      await response.json();
 
-    if(rows.length === 0){
+    if (rows.length === 0) {
 
       status.textContent =
         "לא נמצאו עבודות.";
@@ -226,156 +408,162 @@ document.getElementById("load").onclick = async () => {
       return;
     }
 
-    status.className = "success";
+    const groups =
+      buildSubmissionGroups(rows);
+
+    status.className =
+      "success";
 
     status.textContent =
-      "נמצאו " + rows.length + " עבודות.";
+      "נמצאו " +
+      groups.length +
+      " עבודות מאוחדות מתוך " +
+      rows.length +
+      " הגשות.";
 
 
-    rows.forEach(row => {
+    groups.forEach(group => {
 
       const div =
-        document.createElement("div");
+        document.createElement(
+          "div"
+        );
 
-      div.className = "card";
+      div.className =
+        "card";
+
+      const sourceQuizIds =
+        [
+          ...new Set(
+            group.rows.map(
+              row =>
+                String(
+                  row.quiz_id ?? ""
+                ).trim()
+            )
+          )
+        ];
+
+      const historicalNote =
+        (
+          group.quiz_id === "1" &&
+          sourceQuizIds.some(
+            q => q !== "1"
+          )
+        )
+        ? `
+          <p class="muted">
+            הגשות ישנות שאוחדו לבוחן 1:
+            ${escapeHtml(sourceQuizIds.join(", "))}
+          </p>
+        `
+        : "";
 
       div.innerHTML = `
 
         <h3>
-        בוחן ${escapeHtml(row.quiz_id || "")}
+          בוחן ${escapeHtml(group.quiz_id || "")}
         </h3>
 
         <p>
-        <strong>קוד סטודנט:</strong>
-        ${escapeHtml(row.student_code || "")}
+          <strong>קוד סטודנט:</strong>
+          ${escapeHtml(group.student_code || "")}
         </p>
 
         <p>
-        <strong>סטטוס:</strong>
-        ${escapeHtml(row.status || "")}
+          <strong>מספר הגשות שאוחדו:</strong>
+          ${group.rows.length}
+        </p>
+
+        ${historicalNote}
+
+        <p>
+          <strong>ציון:</strong>
+          ${escapeHtml(groupScoreText(group))}
         </p>
 
         <p>
-        <strong>קובץ:</strong>
-        ${escapeHtml(row.file_path || "")}
-        </p>
-
-        <p>
-        <strong>ציון:</strong>
-        ${
-          row.score == null
-          ? "טרם נבדק"
-          : escapeHtml(String(row.score))
-        }
-        </p>
-
-        <p>
-        <strong>הערה:</strong>
-        ${escapeHtml(row.feedback || "")}
+          <strong>הערה:</strong>
+          ${escapeHtml(groupFeedbackText(group))}
         </p>
 
       `;
 
 
       const openButton =
-        document.createElement("button");
+        document.createElement(
+          "button"
+        );
 
       openButton.textContent =
-        "פתיחת העבודה";
+        "פתיחת העבודה המאוחדת";
 
 
-      openButton.onclick = async () => {
+      openButton.onclick =
+        async () => {
 
-        try {
+          try {
 
-          openButton.disabled = true;
+            openButton.disabled =
+              true;
 
-          openButton.textContent =
-            "פותח...";
+            openButton.textContent =
+              "פותח...";
 
+            const urls =
+              await getSignedUrlsForGroup(
+                group,
+                password
+              );
 
-          const r = await fetch(
-
-            "https://math-mini-check.onrender.com/teacher/file-url",
-
-            {
-              method: "POST",
-
-              headers: {
-                "Content-Type": "application/json"
-              },
-
-              body: JSON.stringify({
-
-                teacher_password: password,
-
-                file_path: row.file_path
-
-              })
-            }
-          );
-
-
-          const data =
-            await r.json();
-
-
-          if (
-            !r.ok ||
-            !Array.isArray(data.signedUrls) ||
-            data.signedUrls.length === 0
-          ) {
-
-            throw new Error(
-              data.error ||
-              "Could not open files"
+            showSubmission(
+              urls,
+              group
             );
 
           }
 
+          catch (e) {
 
-          showSubmission(
-            data.signedUrls,
-            row
-          );
+            console.error(e);
 
-        }
+            alert(
+              "שגיאה בפתיחת העבודה"
+            );
 
-        catch (e) {
+          }
 
-          console.error(e);
+          finally {
 
-          alert(
-            "שגיאה בפתיחת העבודה"
-          );
+            openButton.disabled =
+              false;
 
-        }
+            openButton.textContent =
+              "פתיחת העבודה המאוחדת";
 
-        finally {
+          }
 
-          openButton.disabled = false;
-
-          openButton.textContent =
-            "פתיחת העבודה";
-
-        }
-
-      };
+        };
 
 
-      div.appendChild(openButton);
+      div.appendChild(
+        openButton
+      );
 
-      works.appendChild(div);
+      works.appendChild(
+        div
+      );
 
     });
 
   }
 
-  catch(e){
+  catch (e) {
 
     console.error(e);
 
-    status.className = "error";
+    status.className =
+      "error";
 
     status.textContent =
       "שגיאת תקשורת.";
@@ -386,19 +574,25 @@ document.getElementById("load").onclick = async () => {
 
 
 
-function showSubmission(urls, row) {
+function showSubmission(
+  urls,
+  group
+) {
 
   const oldViewer =
     document.getElementById(
       "submissionViewer"
     );
 
-  if (oldViewer)
+  if (oldViewer) {
     oldViewer.remove();
+  }
 
 
   const viewer =
-    document.createElement("div");
+    document.createElement(
+      "div"
+    );
 
   viewer.id =
     "submissionViewer";
@@ -408,36 +602,50 @@ function showSubmission(urls, row) {
 
 
   const pagesHtml =
-    urls.map((url, index) => `
+    urls.map(
+      (url, index) => `
 
-      <div class="submission-page">
+        <div class="submission-page">
 
-        <div class="page-label">
-          עמוד ${index + 1}
+          <div class="page-label">
+            עמוד ${index + 1}
+          </div>
+
+          <img
+            src="${escapeHtml(url)}"
+            alt="עמוד ${index + 1}"
+          >
+
         </div>
 
-        <img
-          src="${escapeHtml(url)}"
-          alt="עמוד ${index + 1}"
-        >
-
-      </div>
-
-    `).join("");
+      `
+    ).join("");
 
 
   viewer.innerHTML = `
 
-    <h2>בדיקת עבודה</h2>
+    <h2>
+      בדיקת עבודה מאוחדת
+    </h2>
 
     <p>
-    <strong>קוד סטודנט:</strong>
-    ${escapeHtml(row.student_code || "")}
+      <strong>קוד סטודנט:</strong>
+      ${escapeHtml(group.student_code || "")}
     </p>
 
     <p>
-    <strong>מספר עמודים:</strong>
-    ${urls.length}
+      <strong>בוחן:</strong>
+      ${escapeHtml(group.quiz_id || "")}
+    </p>
+
+    <p>
+      <strong>מספר הגשות שאוחדו:</strong>
+      ${group.rows.length}
+    </p>
+
+    <p>
+      <strong>מספר תמונות:</strong>
+      ${urls.length}
     </p>
 
     <div>
@@ -448,7 +656,7 @@ function showSubmission(urls, row) {
     <div style="margin-top:18px;">
 
       <label>
-      <strong>ציון:</strong>
+        <strong>ציון:</strong>
       </label>
 
       <input
@@ -461,7 +669,7 @@ function showSubmission(urls, row) {
 
 
       <label>
-      <strong>הערה:</strong>
+        <strong>הערה:</strong>
       </label>
 
       <div
@@ -504,79 +712,61 @@ function showSubmission(urls, row) {
   `;
 
 
-  document.body.appendChild(viewer);
-
+  document.body.appendChild(
+    viewer
+  );
 
 
   document.getElementById(
     "aiCheckSubmission"
   ).onclick = async () => {
 
-
     const status =
       document.getElementById(
         "aiCheckStatus"
       );
 
-
-    if (urls.length !== 1) {
-
-      status.textContent =
-        "בדיקת AI אוטומטית עדיין זמינה רק לעבודה עם תמונה אחת.";
-
-      return;
-    }
-
-
     status.textContent =
-      "AI בודק...";
-
+      "AI בודק את כל התמונות יחד...";
 
     try {
 
-      const r = await fetch(
+      const r =
+        await fetch(
+          SUPABASE_URL +
+          "/functions/v1/ai-check-submission",
+          {
+            method: "POST",
 
-        SUPABASE_URL +
-        "/functions/v1/ai-check-submission",
+            headers: {
+              "apikey":
+                SUPABASE_KEY,
 
-        {
+              "Content-Type":
+                "application/json"
+            },
 
-          method: "POST",
+            body:
+              JSON.stringify({
+                image_urls:
+                  urls,
 
-          headers: {
-
-            "apikey":
-              SUPABASE_KEY,
-
-            "Content-Type":
-              "application/json"
-
-          },
-
-          body: JSON.stringify({
-
-           image_urls:
-             urls,
-            quiz_id:
-              row.quiz_id
-
-          })
-
-        }
-
-      );
-
+                quiz_id:
+                  group.quiz_id
+              })
+          }
+        );
 
       const data =
         await r.json();
 
-
-      if (!r.ok)
+      if (!r.ok) {
 
         throw new Error(
           data.error ||
           "AI check failed"
         );
+      }
 
 
       document.getElementById(
@@ -590,7 +780,6 @@ function showSubmission(urls, row) {
           "submissionFeedback"
         );
 
-
       const feedbackText =
         data.feedback ?? "";
 
@@ -598,7 +787,9 @@ function showSubmission(urls, row) {
       feedbackBox.innerHTML =
         feedbackText
 
-        .split(/(\[\[.*?\]\])/g)
+        .split(
+          /(\[\[.*?\]\])/g
+        )
 
         .map(part => {
 
@@ -609,13 +800,12 @@ function showSubmission(urls, row) {
 
             const formula =
               part
-              .slice(2,-2)
-              .trim()
-              .replace(
-                /^\$+|\$+$/g,
-                ""
-              );
-
+                .slice(2, -2)
+                .trim()
+                .replace(
+                  /^\$+|\$+$/g,
+                  ""
+                );
 
             return `
               <span
@@ -624,24 +814,24 @@ function showSubmission(urls, row) {
                 \\(${escapeHtml(formula)}\\)
               </span>
             `;
-
           }
 
-          return escapeHtml(part);
-
+          return escapeHtml(
+            part
+          );
         })
 
         .join("");
 
 
       if (
-        window.MathJax?.typesetPromise
+        window.MathJax
+          ?.typesetPromise
       ) {
 
         await MathJax.typesetPromise(
           [feedbackBox]
         );
-
       }
 
 
@@ -667,12 +857,10 @@ function showSubmission(urls, row) {
     "saveSubmissionReview"
   ).onclick = async () => {
 
-
     const score =
       document.getElementById(
         "submissionScore"
       ).value.trim();
-
 
     const feedback =
       document.getElementById(
@@ -694,64 +882,62 @@ function showSubmission(urls, row) {
     }
 
 
+    const teacherPassword =
+      document.getElementById(
+        "teacher_password"
+      ).value.trim();
+
+
     try {
 
-      const r = await fetch(
+      for (const sourceRow of group.rows) {
 
-        SUPABASE_URL +
-        "/functions/v1/teacher-submissions",
+        const r =
+          await fetch(
+            SUPABASE_URL +
+            "/functions/v1/teacher-submissions",
+            {
+              method: "POST",
 
-        {
+              headers: {
+                "apikey":
+                  SUPABASE_KEY,
 
-          method: "POST",
+                "Content-Type":
+                  "application/json"
+              },
 
-          headers: {
+              body:
+                JSON.stringify({
+                  action:
+                    "save",
 
-            "apikey":
-              SUPABASE_KEY,
+                  teacher_password:
+                    teacherPassword,
 
-            "Content-Type":
-              "application/json"
+                  submission_id:
+                    sourceRow.id,
 
-          },
+                  score:
+                    Number(score),
 
-          body: JSON.stringify({
+                  feedback:
+                    feedback
+                })
+            }
+          );
 
-            action: "save",
+        if (!r.ok) {
 
-            teacher_password:
-              document
-              .getElementById(
-                "teacher_password"
-              )
-              .value
-              .trim(),
-
-            submission_id:
-              row.id,
-
-            score:
-              Number(score),
-
-            feedback:
-              feedback
-
-          })
-
+          throw new Error(
+            await r.text()
+          );
         }
-
-      );
-
-
-      if (!r.ok)
-
-        throw new Error(
-          await r.text()
-        );
+      }
 
 
       alert(
-        "הבדיקה נשמרה"
+        "הבדיקה נשמרה לכל חלקי העבודה המאוחדת"
       );
 
     }
@@ -779,22 +965,41 @@ function showSubmission(urls, row) {
 
 
   viewer.scrollIntoView({
-    behavior:"smooth"
+    behavior: "smooth"
   });
 
 }
 
 
 
-function escapeHtml(value){
+function escapeHtml(value) {
 
   return String(value)
 
-    .replaceAll("&","&amp;")
-    .replaceAll("<","&lt;")
-    .replaceAll(">","&gt;")
-    .replaceAll('"',"&quot;")
-    .replaceAll("'","&#039;");
+    .replaceAll(
+      "&",
+      "&amp;"
+    )
+
+    .replaceAll(
+      "<",
+      "&lt;"
+    )
+
+    .replaceAll(
+      ">",
+      "&gt;"
+    )
+
+    .replaceAll(
+      '"',
+      "&quot;"
+    )
+
+    .replaceAll(
+      "'",
+      "&#039;"
+    );
 
 }
 
@@ -804,24 +1009,20 @@ document.getElementById(
   "upload_exam"
 ).onclick = async () => {
 
-
   const password =
     document.getElementById(
       "teacher_password"
     ).value.trim();
-
 
   const examCode =
     document.getElementById(
       "exam_code"
     ).value.trim();
 
-
   const file =
     document.getElementById(
       "exam_file"
     ).files[0];
-
 
   const status =
     document.getElementById(
@@ -866,7 +1067,6 @@ document.getElementById(
   const form =
     new FormData();
 
-
   form.append(
     "teacher_password",
     password
@@ -885,24 +1085,17 @@ document.getElementById(
 
   try {
 
-    const r = await fetch(
-
-      "https://math-mini-check.onrender.com/teacher/exam-upload",
-
-      {
-
-        method:"POST",
-
-        body:form
-
-      }
-
-    );
-
+    const r =
+      await fetch(
+        "https://math-mini-check.onrender.com/teacher/exam-upload",
+        {
+          method: "POST",
+          body: form
+        }
+      );
 
     const data =
       await r.json();
-
 
     if (!r.ok) {
 
@@ -910,9 +1103,7 @@ document.getElementById(
         data.error ||
         "Upload failed"
       );
-
     }
-
 
     status.className =
       "success";
