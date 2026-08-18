@@ -92,7 +92,7 @@ nav a {
 <h1>בדיקת תרגול קצר</h1>
 
 <nav>
-  <a href="index.html">הגשת עבודה</a>
+  <a id="submit_link" href="#">הגשת עבודה</a>
   <a href="results.html">התוצאות שלי</a>
   <a href="teacher.html">מרצה</a>
 </nav>
@@ -175,6 +175,15 @@ const GROUP_ID =
 
 const QUIZ_ID =
   params.get("quiz") || "1";
+
+
+document.getElementById("submit_link").href =
+  "index.html?course=" +
+  encodeURIComponent(COURSE_ID) +
+  "&group=" +
+  encodeURIComponent(GROUP_ID) +
+  "&quiz=" +
+  encodeURIComponent(QUIZ_ID);
 
 
 const quizDisplay =
