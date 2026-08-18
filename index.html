@@ -3,6 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
 <title>בדיקת תרגול קצר</title>
 
 <style>
@@ -99,7 +100,7 @@ nav a {
 >
 
 <div class="quiz-box" id="quiz_display">
-טוען מספר בוחן...
+טוען פרטי בוחן...
 </div>
 
 <input
@@ -110,7 +111,8 @@ nav a {
 >
 
 <p class="muted">
-ניתן לבחור מספר תמונות יחד. מומלץ לבחור אותן לפי סדר העמודים.
+ניתן לבחור מספר תמונות יחד.
+מומלץ לבחור אותן לפי סדר העמודים.
 </p>
 
 <button id="submit">
@@ -121,47 +123,73 @@ nav a {
 
 </div>
 
+
 <script>
 
 const API_BASE =
   "https://math-mini-check.onrender.com";
+
 
 const params =
   new URLSearchParams(
     window.location.search
   );
 
-/* ברירת מחדל: בוחן 1 */
+
+const COURSE_ID =
+  params.get("course") || "general";
+
+const GROUP_ID =
+  params.get("group") || "general";
+
 const QUIZ_ID =
   params.get("quiz") || "1";
+
 
 const quizDisplay =
   document.getElementById(
     "quiz_display"
   );
 
+
 quizDisplay.textContent =
-  "בוחן מספר " + QUIZ_ID;
+  "מקצוע: " + COURSE_ID +
+  " | קבוצה: " + GROUP_ID +
+  " | בוחן מספר " + QUIZ_ID;
 
 
-document.getElementById("submit").onclick = async () => {
+
+document.getElementById("submit").onclick =
+async () => {
+
 
   const status =
     document.getElementById("status");
 
+
   const studentCode =
-    document.getElementById("student_code").value.trim();
+    document.getElementById(
+      "student_code"
+    ).value.trim();
+
 
   const pin =
-    document.getElementById("pin").value.trim();
+    document.getElementById(
+      "pin"
+    ).value.trim();
+
 
   const files =
     Array.from(
-      document.getElementById("files").files
+      document.getElementById(
+        "files"
+      ).files
     );
+
 
   status.className = "";
   status.textContent = "";
+
 
   if (
     !studentCode ||
@@ -177,10 +205,12 @@ document.getElementById("submit").onclick = async () => {
     return;
   }
 
+
   for (const file of files) {
 
     const n =
       (file.name || "").toLowerCase();
+
 
     if (
       !(
@@ -199,15 +229,16 @@ document.getElementById("submit").onclick = async () => {
     }
   }
 
+
   try {
 
     status.textContent =
-      "מעלה " +
-      files.length +
-      " תמונות...";
+      "מעלה את העבודה ובודק אותה אוטומטית...";
+
 
     const form =
       new FormData();
+
 
     form.append(
       "student_code",
@@ -220,9 +251,20 @@ document.getElementById("submit").onclick = async () => {
     );
 
     form.append(
+      "course_id",
+      COURSE_ID
+    );
+
+    form.append(
+      "group_id",
+      GROUP_ID
+    );
+
+    form.append(
       "quiz_id",
       QUIZ_ID
     );
+
 
     for (const file of files) {
 
@@ -231,6 +273,7 @@ document.getElementById("submit").onclick = async () => {
         file
       );
     }
+
 
     const response =
       await fetch(
@@ -241,16 +284,25 @@ document.getElementById("submit").onclick = async () => {
         }
       );
 
+
     let data = {};
 
+
     try {
-      data = await response.json();
+
+      data =
+        await response.json();
+
     }
+
     catch (_) {}
+
 
     if (!response.ok) {
 
-      status.className = "error";
+      status.className =
+        "error";
+
 
       status.textContent =
         data.error ||
@@ -259,27 +311,56 @@ document.getElementById("submit").onclick = async () => {
       return;
     }
 
-    status.className = "success";
 
-    status.textContent =
-      "העבודה נשלחה בהצלחה. הועלו " +
-      files.length +
-      " תמונות.";
+    status.className =
+      "success";
+
+
+    if (
+      data.status === "graded" &&
+      data.score !== null &&
+      data.score !== undefined
+    ) {
+
+      status.textContent =
+        "העבודה נבדקה. הציון: " +
+        data.score +
+        (
+          data.feedback
+          ? " — " + data.feedback
+          : ""
+        );
+
+    }
+
+    else {
+
+      status.textContent =
+        data.feedback ||
+        "העבודה התקבלה ונדרשת בדיקת מרצה.";
+
+    }
+
 
     document.getElementById(
       "files"
     ).value = "";
+
   }
+
 
   catch(error) {
 
     console.error(error);
 
-    status.className = "error";
+    status.className =
+      "error";
 
     status.textContent =
       "שגיאת תקשורת.";
+
   }
+
 };
 
 </script>
