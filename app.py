@@ -590,25 +590,19 @@ def submit():
             "pin_hash": phash(code, pin),
             "quiz_id": quiz_key,
             "file_path": json.dumps(uploaded_paths, ensure_ascii=False),
-            "status": "grading"
+            "status": "submitted"
         }).execute()
 
-        # Automatic grading starts immediately after upload.
-        grade_result = auto_grade_submission(
-            submission_id=sid,
-            quiz_key=quiz_key,
-            uploaded_paths=uploaded_paths
-        )
-
+        # The student decides when to start AI grading.
         return jsonify(
             submission_id=sid,
             files=len(uploaded_paths),
             course_id=course_id,
             group_id=group_id,
             quiz_id=quiz_id,
-            status=grade_result["status"],
-            score=grade_result["score"],
-            feedback=grade_result["feedback"]
+            status="submitted",
+            score=None,
+            feedback="העבודה התקבלה. ניתן להתחיל בדיקת AI."
         )
 
     except Exception as e:
@@ -626,6 +620,100 @@ def submit():
             return jsonify(error="העבודה הזאת כבר הוגשה"), 409
 
         return jsonify(error="שגיאה בשמירת ההגשה"), 500
+
+
+
+# ==========================================================
+# STUDENT – START AI GRADING
+# ==========================================================
+
+@app.post("/student/grade")
+def student_grade():
+    d = request.get_json(force=True)
+
+    submission_id = str(d.get("submission_id", "")).strip()
+    code = str(d.get("student_code", "")).strip()
+    pin = str(d.get("pin", ""))
+
+    if not submission_id or not code or not pin:
+        return jsonify(error="חסרים פרטים לבדיקה"), 400
+
+    rows = (
+        sb.table("mini_check_submissions")
+        .select(
+            "id,"
+            "student_code,"
+            "pin_hash,"
+            "quiz_id,"
+            "file_path,"
+            "status,"
+            "score,"
+            "feedback"
+        )
+        .eq("id", submission_id)
+        .limit(1)
+        .execute()
+        .data
+    )
+
+    if not rows:
+        return jsonify(error="ההגשה לא נמצאה"), 404
+
+    row = rows[0]
+
+    if row.get("student_code") != code or row.get("pin_hash") != phash(code, pin):
+        return jsonify(error="קוד סטודנט או PIN שגויים"), 403
+
+    if row.get("status") == "graded" and row.get("score") is not None:
+        return jsonify(
+            submission_id=submission_id,
+            status="graded",
+            score=row.get("score"),
+            feedback=row.get("feedback") or ""
+        )
+
+    raw_file_path = row.get("file_path") or ""
+
+    if isinstance(raw_file_path, list):
+        uploaded_paths = raw_file_path
+    else:
+        try:
+            parsed = json.loads(str(raw_file_path))
+            uploaded_paths = parsed if isinstance(parsed, list) else [parsed]
+        except Exception:
+            uploaded_paths = [str(raw_file_path)]
+
+    uploaded_paths = [
+        str(path).strip()
+        for path in uploaded_paths
+        if str(path).strip()
+    ]
+
+    if not uploaded_paths:
+        return jsonify(error="לא נמצאו קבצים לבדיקה"), 400
+
+    try:
+        sb.table("mini_check_submissions").update({
+            "status": "grading",
+            "score": None
+        }).eq("id", submission_id).execute()
+
+        grade_result = auto_grade_submission(
+            submission_id=submission_id,
+            quiz_key=row.get("quiz_id", ""),
+            uploaded_paths=uploaded_paths
+        )
+
+        return jsonify(
+            submission_id=submission_id,
+            status=grade_result["status"],
+            score=grade_result["score"],
+            feedback=grade_result["feedback"]
+        )
+
+    except Exception as e:
+        print("STUDENT GRADE ERROR:", e)
+        return jsonify(error="שגיאה בבדיקת AI"), 500
 
 
 # ==========================================================
