@@ -202,7 +202,7 @@ def auto_grade_submission(submission_id, quiz_key, uploaded_paths):
     """
     try:
         rubric_rows = (
-            sb.table("rubrics")
+            sb.table("mini_check_rubrics")
             .select("problem,rubric")
             .eq("quiz_id", quiz_key)
             .limit(1)
@@ -690,7 +690,7 @@ def rubric():
 
     quiz_key = make_quiz_key(course_id, group_id, quiz_id)
 
-    sb.table("rubrics").upsert({
+    sb.table("mini_check_rubrics").upsert({
         "quiz_id": quiz_key,
         "problem": d.get("problem", ""),
         "rubric": d.get("rubric", "")
