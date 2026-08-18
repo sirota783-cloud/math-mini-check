@@ -235,10 +235,15 @@ function resetSubmissionState() {
   ).textContent =
     "בדיקה עם AI וקבלת ציון";
 
-  document.getElementById(
-    "delete_submission"
-  ).disabled = false;
+  const deleteButton =
+    document.getElementById(
+      "delete_submission"
+    );
+
+  deleteButton.disabled = false;
+  deleteButton.style.display = "block";
 }
+
 
 
 document.getElementById("submit").onclick =
@@ -437,9 +442,24 @@ async () => {
     ).value = "";
 
 
-    document.getElementById(
-      "delete_submission"
-    ).disabled = false;
+    const deleteButton =
+      document.getElementById(
+        "delete_submission"
+      );
+
+    deleteButton.disabled = false;
+    deleteButton.style.display = "block";
+
+
+    const aiButton =
+      document.getElementById(
+        "ai_grade"
+      );
+
+    aiButton.disabled = false;
+
+    aiButton.textContent =
+      "בדיקה עם AI וקבלת ציון";
 
 
     aiBox.style.display =
@@ -617,7 +637,9 @@ document.getElementById("ai_grade").onclick =
 async () => {
 
   const button =
-    document.getElementById("ai_grade");
+    document.getElementById(
+      "ai_grade"
+    );
 
   const deleteButton =
     document.getElementById(
@@ -646,11 +668,17 @@ async () => {
   }
 
 
+  /*
+    From this moment deletion is no longer offered.
+    The server also checks the submission status.
+  */
+  deleteButton.disabled = true;
+  deleteButton.style.display = "none";
+
+
   try {
 
     button.disabled = true;
-
-    deleteButton.disabled = true;
 
 
     gradeResult.className = "";
@@ -752,8 +780,7 @@ async () => {
       button.textContent =
         "הבדיקה הסתיימה";
 
-
-      deleteButton.disabled =
+      button.disabled =
         true;
 
     }
@@ -770,11 +797,10 @@ async () => {
         "העבודה דורשת בדיקת מרצה.";
 
 
+      button.textContent =
+        "הבדיקה הסתיימה";
+
       button.disabled =
-        false;
-
-
-      deleteButton.disabled =
         true;
 
     }
@@ -796,11 +822,7 @@ async () => {
 
 
     button.disabled =
-      false;
-
-
-    deleteButton.disabled =
-      false;
+      true;
 
   }
 
