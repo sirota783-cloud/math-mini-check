@@ -714,7 +714,86 @@ def student_grade():
     except Exception as e:
         print("STUDENT GRADE ERROR:", e)
         return jsonify(error="שגיאה בבדיקת AI"), 500
+# ==========================================================
+# STUDENT – DELETE SUBMISSION BEFORE GRADING
+# ==========================================================
 
+@app.post("/student/delete")
+def student_delete_submission():
+    d = request.get_json(force=True)
+
+    submission_id = str(d.get("submission_id", "")).strip()
+    code = str(d.get("student_code", "")).strip()
+    pin = str(d.get("pin", ""))
+
+    if not submission_id or not code or not pin:
+        return jsonify(error="חסרים פרטים למחיקת ההגשה"), 400
+
+    rows = (
+        sb.table("mini_check_submissions")
+        .select(
+            "id,"
+            "student_code,"
+            "pin_hash,"
+            "file_path,"
+            "status"
+        )
+        .eq("id", submission_id)
+        .limit(1)
+        .execute()
+        .data
+    )
+
+    if not rows:
+        return jsonify(error="ההגשה לא נמצאה"), 404
+
+    row = rows[0]
+
+    if (
+        row.get("student_code") != code
+        or row.get("pin_hash") != phash(code, pin)
+    ):
+        return jsonify(error="קוד סטודנט או PIN שגויים"), 403
+
+    if row.get("status") != "submitted":
+        return jsonify(
+            error="לא ניתן למחוק עבודה לאחר תחילת הבדיקה"
+        ), 409
+
+    raw_file_path = row.get("file_path") or ""
+
+    if isinstance(raw_file_path, list):
+        paths = raw_file_path
+    else:
+        try:
+            parsed = json.loads(str(raw_file_path))
+            paths = parsed if isinstance(parsed, list) else [parsed]
+        except Exception:
+            paths = [str(raw_file_path)]
+
+    paths = [
+        str(path).strip()
+        for path in paths
+        if str(path).strip()
+    ]
+
+    try:
+        if paths:
+            sb.storage.from_("mini-check-files").remove(paths)
+
+        sb.table("mini_check_submissions") \
+            .delete() \
+            .eq("id", submission_id) \
+            .execute()
+
+        return jsonify(
+            deleted=True,
+            submission_id=submission_id
+        )
+
+    except Exception as e:
+        print("STUDENT DELETE ERROR:", e)
+        return jsonify(error="שגיאה במחיקת ההגשה"), 500
 
 # ==========================================================
 # STUDENT RESULTS
