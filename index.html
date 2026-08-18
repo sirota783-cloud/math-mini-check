@@ -212,7 +212,91 @@ let lastStudentCode = "";
 let lastPin = "";
 
 
+const STORAGE_KEY =
+  "mini_check_current_submission_v2::" +
+  COURSE_ID + "::" +
+  GROUP_ID + "::" +
+  QUIZ_ID;
+
+
+function saveSubmissionState() {
+  sessionStorage.setItem(
+    STORAGE_KEY,
+    JSON.stringify({
+      submission_id: lastSubmissionId,
+      student_code: lastStudentCode,
+      pin: lastPin
+    })
+  );
+}
+
+
+function clearSavedSubmissionState() {
+  sessionStorage.removeItem(STORAGE_KEY);
+}
+
+
+function restoreSubmissionState() {
+
+  let saved = null;
+
+  try {
+    saved = JSON.parse(
+      sessionStorage.getItem(STORAGE_KEY) || "null"
+    );
+  }
+  catch (_) {
+    clearSavedSubmissionState();
+    return;
+  }
+
+  if (
+    !saved ||
+    !saved.submission_id ||
+    !saved.student_code ||
+    !saved.pin
+  ) {
+    return;
+  }
+
+  lastSubmissionId = saved.submission_id;
+  lastStudentCode = saved.student_code;
+  lastPin = saved.pin;
+
+  document.getElementById("student_code").value =
+    lastStudentCode;
+
+  document.getElementById("pin").value =
+    lastPin;
+
+  const status =
+    document.getElementById("status");
+
+  status.className = "success";
+  status.textContent =
+    "נמצאה הגשה קיימת. ניתן להמשיך לבדיקה או למחוק את ההגשה.";
+
+  document.getElementById("ai_box").style.display =
+    "block";
+
+  const aiButton =
+    document.getElementById("ai_grade");
+
+  aiButton.disabled = false;
+  aiButton.textContent =
+    "בדיקה עם AI וקבלת ציון";
+
+  const deleteButton =
+    document.getElementById("delete_submission");
+
+  deleteButton.disabled = false;
+  deleteButton.style.display = "block";
+}
+
+
 function resetSubmissionState() {
+
+  clearSavedSubmissionState();
 
   lastSubmissionId = null;
   lastStudentCode = "";
@@ -425,6 +509,9 @@ async () => {
 
     lastPin =
       pin;
+
+
+    saveSubmissionState();
 
 
     status.className =
@@ -783,6 +870,9 @@ async () => {
       button.disabled =
         true;
 
+
+      clearSavedSubmissionState();
+
     }
 
 
@@ -828,6 +918,9 @@ async () => {
 
 };
 
+
+
+restoreSubmissionState();
 
 
 function escapeHtml(value) {
