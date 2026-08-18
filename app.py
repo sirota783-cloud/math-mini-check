@@ -621,7 +621,65 @@ def submit():
 
         return jsonify(error="שגיאה בשמירת ההגשה"), 500
 
+# ==========================================================
+# STUDENT – FIND EXISTING SUBMISSION
+# ==========================================================
 
+@app.post("/student/submission")
+def student_existing_submission():
+    d = request.get_json(force=True)
+
+    code = str(d.get("student_code", "")).strip()
+    pin = str(d.get("pin", ""))
+    course_id = clean_part(d.get("course_id", ""), "general")
+    group_id = clean_part(d.get("group_id", ""), "general")
+    quiz_id = clean_part(d.get("quiz_id", ""), "1")
+
+    if not code or not pin:
+        return jsonify(error="חסרים קוד סטודנט או PIN"), 400
+
+    quiz_key = make_quiz_key(course_id, group_id, quiz_id)
+
+    try:
+        rows = (
+            sb.table("mini_check_submissions")
+            .select(
+                "id,"
+                "student_code,"
+                "quiz_id,"
+                "status,"
+                "score,"
+                "feedback,"
+                "created_at"
+            )
+            .eq("student_code", code)
+            .eq("pin_hash", phash(code, pin))
+            .eq("quiz_id", quiz_key)
+            .order("created_at", desc=True)
+            .limit(1)
+            .execute()
+            .data
+        )
+
+        if not rows:
+            return jsonify(found=False)
+
+        row = rows[0]
+
+        return jsonify(
+            found=True,
+            submission_id=row.get("id"),
+            status=row.get("status"),
+            score=row.get("score"),
+            feedback=row.get("feedback") or "",
+            course_id=course_id,
+            group_id=group_id,
+            quiz_id=quiz_id
+        )
+
+    except Exception as e:
+        print("STUDENT FIND SUBMISSION ERROR:", e)
+        return jsonify(error="שגיאה בחיפוש ההגשה"), 500
 
 # ==========================================================
 # STUDENT – START AI GRADING
