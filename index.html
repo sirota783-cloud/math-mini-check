@@ -294,6 +294,281 @@ function restoreSubmissionState() {
 }
 
 
+
+async function findExistingSubmission() {
+
+  const studentCode =
+    document.getElementById(
+      "student_code"
+    ).value.trim();
+
+  const pin =
+    document.getElementById(
+      "pin"
+    ).value.trim();
+
+  if (!studentCode || !pin) {
+    return;
+  }
+
+  const status =
+    document.getElementById("status");
+
+  const gradeResult =
+    document.getElementById(
+      "grade_result"
+    );
+
+  const aiBox =
+    document.getElementById(
+      "ai_box"
+    );
+
+  const aiButton =
+    document.getElementById(
+      "ai_grade"
+    );
+
+  const deleteButton =
+    document.getElementById(
+      "delete_submission"
+    );
+
+  const submitButton =
+    document.getElementById(
+      "submit"
+    );
+
+  try {
+
+    status.className = "";
+    status.textContent =
+      "בודק אם קיימת הגשה...";
+
+    const response =
+      await fetch(
+        API_BASE + "/student/submission",
+        {
+          method: "POST",
+
+          headers: {
+            "Content-Type":
+              "application/json"
+          },
+
+          body: JSON.stringify({
+            student_code:
+              studentCode,
+
+            pin:
+              pin,
+
+            course_id:
+              COURSE_ID,
+
+            group_id:
+              GROUP_ID,
+
+            quiz_id:
+              QUIZ_ID
+          })
+        }
+      );
+
+    let data = {};
+
+    try {
+      data = await response.json();
+    }
+    catch (_) {}
+
+    if (!response.ok) {
+
+      status.className =
+        "error";
+
+      status.textContent =
+        data.error ||
+        "שגיאה בבדיקת ההגשה.";
+
+      return;
+    }
+
+    if (!data.found) {
+
+      clearSavedSubmissionState();
+
+      lastSubmissionId = null;
+      lastStudentCode = "";
+      lastPin = "";
+
+      aiBox.style.display =
+        "none";
+
+      gradeResult.textContent = "";
+
+      submitButton.disabled =
+        false;
+
+      status.className = "";
+      status.textContent = "";
+
+      return;
+    }
+
+    lastSubmissionId =
+      data.submission_id;
+
+    lastStudentCode =
+      studentCode;
+
+    lastPin =
+      pin;
+
+    saveSubmissionState();
+
+    submitButton.disabled =
+      true;
+
+    aiBox.style.display =
+      "block";
+
+    gradeResult.className = "";
+
+    const currentStatus =
+      data.status || "submitted";
+
+    if (currentStatus === "submitted") {
+
+      status.className =
+        "success";
+
+      status.textContent =
+        "נמצאה הגשה קיימת. ניתן להתחיל בדיקה או למחוק את ההגשה.";
+
+      aiButton.disabled =
+        false;
+
+      aiButton.textContent =
+        "בדיקה עם AI וקבלת ציון";
+
+      deleteButton.disabled =
+        false;
+
+      deleteButton.style.display =
+        "block";
+
+      gradeResult.textContent = "";
+
+      return;
+    }
+
+    deleteButton.disabled =
+      true;
+
+    deleteButton.style.display =
+      "none";
+
+    if (currentStatus === "graded") {
+
+      status.className =
+        "success";
+
+      status.textContent =
+        "העבודה כבר נבדקה.";
+
+      aiButton.disabled =
+        true;
+
+      aiButton.textContent =
+        "הבדיקה הסתיימה";
+
+      gradeResult.className =
+        "success";
+
+      gradeResult.innerHTML =
+        "ציון: <strong>" +
+        escapeHtml(
+          data.score
+        ) +
+        "</strong>" +
+        (
+          data.feedback
+          ? "<br>הערה: " +
+            escapeHtml(
+              data.feedback
+            )
+          : ""
+        );
+
+      return;
+    }
+
+    if (currentStatus === "grading") {
+
+      status.className =
+        "success";
+
+      status.textContent =
+        "העבודה נמצאה והבדיקה כבר התחילה.";
+
+      aiButton.disabled =
+        true;
+
+      aiButton.textContent =
+        "הבדיקה מתבצעת";
+
+      gradeResult.textContent =
+        "נא להמתין לסיום הבדיקה.";
+
+      return;
+    }
+
+    status.className =
+      "success";
+
+    status.textContent =
+      "העבודה נמצאה.";
+
+    aiButton.disabled =
+      true;
+
+    aiButton.textContent =
+      "נדרשת בדיקת מרצה";
+
+    gradeResult.className =
+      "error";
+
+    gradeResult.textContent =
+      data.feedback ||
+      "העבודה דורשת בדיקת מרצה.";
+
+  }
+
+  catch(error) {
+
+    console.error(error);
+
+    status.className =
+      "error";
+
+    status.textContent =
+      "שגיאת תקשורת.";
+  }
+}
+
+
+function scheduleExistingSubmissionCheck() {
+
+  window.setTimeout(
+    () => {
+      findExistingSubmission();
+    },
+    300
+  );
+}
+
+
 function resetSubmissionState() {
 
   clearSavedSubmissionState();
@@ -326,6 +601,10 @@ function resetSubmissionState() {
 
   deleteButton.disabled = false;
   deleteButton.style.display = "block";
+
+  document.getElementById(
+    "submit"
+  ).disabled = false;
 }
 
 
@@ -488,6 +767,13 @@ async () => {
 
     if (!response.ok) {
 
+      if (response.status === 409) {
+
+        await findExistingSubmission();
+
+        return;
+      }
+
       status.className =
         "error";
 
@@ -551,6 +837,10 @@ async () => {
 
     aiBox.style.display =
       "block";
+
+
+    submitButton.disabled =
+      true;
 
   }
 
@@ -921,6 +1211,36 @@ async () => {
 
 
 restoreSubmissionState();
+
+
+document.getElementById(
+  "student_code"
+).addEventListener(
+  "change",
+  findExistingSubmission
+);
+
+
+document.getElementById(
+  "pin"
+).addEventListener(
+  "change",
+  findExistingSubmission
+);
+
+
+document.getElementById(
+  "pin"
+).addEventListener(
+  "blur",
+  findExistingSubmission
+);
+
+
+window.addEventListener(
+  "load",
+  scheduleExistingSubmissionCheck
+);
 
 
 function escapeHtml(value) {
