@@ -126,40 +126,22 @@ nav a {
 const API_BASE =
   "https://math-mini-check.onrender.com";
 
-
-/* Read quiz number from URL:
-   index.html?quiz=2
-*/
 const params =
   new URLSearchParams(
     window.location.search
   );
 
+/* ברירת מחדל: בוחן 2 */
 const QUIZ_ID =
-  params.get("quiz");
-
+  params.get("quiz") || "2";
 
 const quizDisplay =
   document.getElementById(
     "quiz_display"
   );
 
-
-if (QUIZ_ID) {
-
-  quizDisplay.textContent =
-    "בוחן מספר " + QUIZ_ID;
-
-} else {
-
-  quizDisplay.textContent =
-    "לא הוגדר מספר בוחן";
-
-  quizDisplay.classList.add(
-    "error"
-  );
-
-}
+quizDisplay.textContent =
+  "בוחן מספר " + QUIZ_ID;
 
 
 document.getElementById("submit").onclick = async () => {
@@ -178,21 +160,8 @@ document.getElementById("submit").onclick = async () => {
       document.getElementById("files").files
     );
 
-
   status.className = "";
   status.textContent = "";
-
-
-  if (!QUIZ_ID) {
-
-    status.className = "error";
-
-    status.textContent =
-      "לא הוגדר מספר בוחן בקישור.";
-
-    return;
-  }
-
 
   if (
     !studentCode ||
@@ -207,7 +176,6 @@ document.getElementById("submit").onclick = async () => {
 
     return;
   }
-
 
   for (const file of files) {
 
@@ -231,7 +199,6 @@ document.getElementById("submit").onclick = async () => {
     }
   }
 
-
   try {
 
     status.textContent =
@@ -239,10 +206,8 @@ document.getElementById("submit").onclick = async () => {
       files.length +
       " תמונות...";
 
-
     const form =
       new FormData();
-
 
     form.append(
       "student_code",
@@ -259,16 +224,13 @@ document.getElementById("submit").onclick = async () => {
       QUIZ_ID
     );
 
-
     for (const file of files) {
 
       form.append(
         "files",
         file
       );
-
     }
-
 
     const response =
       await fetch(
@@ -279,18 +241,12 @@ document.getElementById("submit").onclick = async () => {
         }
       );
 
-
     let data = {};
 
     try {
-
-      data =
-        await response.json();
-
+      data = await response.json();
     }
-
     catch (_) {}
-
 
     if (!response.ok) {
 
@@ -303,7 +259,6 @@ document.getElementById("submit").onclick = async () => {
       return;
     }
 
-
     status.className = "success";
 
     status.textContent =
@@ -311,11 +266,9 @@ document.getElementById("submit").onclick = async () => {
       files.length +
       " תמונות.";
 
-
     document.getElementById(
       "files"
     ).value = "";
-
   }
 
   catch(error) {
@@ -326,9 +279,7 @@ document.getElementById("submit").onclick = async () => {
 
     status.textContent =
       "שגיאת תקשורת.";
-
   }
-
 };
 
 </script>
