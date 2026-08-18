@@ -84,6 +84,11 @@ nav a {
   margin-top: 10px;
   line-height: 1.6;
 }
+
+#delete_submission {
+  background: #fff3f3;
+  border: 1px solid #c55;
+}
 </style>
 </head>
 
@@ -148,6 +153,10 @@ nav a {
 בדיקה עם AI וקבלת ציון
 </button>
 
+<button id="delete_submission">
+מחיקת ההגשה
+</button>
+
 <div id="grade_result"></div>
 
 </div>
@@ -201,6 +210,35 @@ quizDisplay.textContent =
 let lastSubmissionId = null;
 let lastStudentCode = "";
 let lastPin = "";
+
+
+function resetSubmissionState() {
+
+  lastSubmissionId = null;
+  lastStudentCode = "";
+  lastPin = "";
+
+  document.getElementById(
+    "ai_box"
+  ).style.display = "none";
+
+  document.getElementById(
+    "grade_result"
+  ).textContent = "";
+
+  document.getElementById(
+    "ai_grade"
+  ).disabled = false;
+
+  document.getElementById(
+    "ai_grade"
+  ).textContent =
+    "בדיקה עם AI וקבלת ציון";
+
+  document.getElementById(
+    "delete_submission"
+  ).disabled = false;
+}
 
 
 document.getElementById("submit").onclick =
@@ -399,6 +437,11 @@ async () => {
     ).value = "";
 
 
+    document.getElementById(
+      "delete_submission"
+    ).disabled = false;
+
+
     aiBox.style.display =
       "block";
 
@@ -428,12 +471,158 @@ async () => {
 
 
 
+document.getElementById("delete_submission").onclick =
+async () => {
+
+  const status =
+    document.getElementById("status");
+
+  const deleteButton =
+    document.getElementById(
+      "delete_submission"
+    );
+
+
+  if (
+    !lastSubmissionId ||
+    !lastStudentCode ||
+    !lastPin
+  ) {
+
+    status.className =
+      "error";
+
+    status.textContent =
+      "לא נמצאה הגשה למחיקה.";
+
+    return;
+  }
+
+
+  const confirmed =
+    confirm(
+      "האם למחוק את ההגשה? לאחר המחיקה ניתן להגיש מחדש."
+    );
+
+
+  if (!confirmed) {
+    return;
+  }
+
+
+  try {
+
+    deleteButton.disabled = true;
+
+
+    status.className = "";
+
+    status.textContent =
+      "מוחק את ההגשה...";
+
+
+    const response =
+      await fetch(
+        API_BASE + "/student/delete",
+        {
+          method: "POST",
+
+          headers: {
+            "Content-Type":
+              "application/json"
+          },
+
+          body: JSON.stringify({
+
+            submission_id:
+              lastSubmissionId,
+
+            student_code:
+              lastStudentCode,
+
+            pin:
+              lastPin
+
+          })
+        }
+      );
+
+
+    let data = {};
+
+
+    try {
+
+      data =
+        await response.json();
+
+    }
+
+    catch (_) {}
+
+
+    if (!response.ok) {
+
+      status.className =
+        "error";
+
+      status.textContent =
+        data.error ||
+        "שגיאה במחיקת ההגשה.";
+
+      deleteButton.disabled =
+        false;
+
+      return;
+    }
+
+
+    status.className =
+      "success";
+
+    status.textContent =
+      "ההגשה נמחקה. ניתן להגיש עבודה חדשה.";
+
+
+    document.getElementById(
+      "files"
+    ).value = "";
+
+
+    resetSubmissionState();
+
+  }
+
+
+  catch(error) {
+
+    console.error(error);
+
+    status.className =
+      "error";
+
+    status.textContent =
+      "שגיאת תקשורת.";
+
+    deleteButton.disabled =
+      false;
+
+  }
+
+};
+
+
+
 document.getElementById("ai_grade").onclick =
 async () => {
 
   const button =
     document.getElementById("ai_grade");
 
+  const deleteButton =
+    document.getElementById(
+      "delete_submission"
+    );
 
   const gradeResult =
     document.getElementById(
@@ -460,6 +649,8 @@ async () => {
   try {
 
     button.disabled = true;
+
+    deleteButton.disabled = true;
 
 
     gradeResult.className = "";
@@ -561,6 +752,10 @@ async () => {
       button.textContent =
         "הבדיקה הסתיימה";
 
+
+      deleteButton.disabled =
+        true;
+
     }
 
 
@@ -577,6 +772,10 @@ async () => {
 
       button.disabled =
         false;
+
+
+      deleteButton.disabled =
+        true;
 
     }
 
@@ -597,6 +796,10 @@ async () => {
 
 
     button.disabled =
+      false;
+
+
+    deleteButton.disabled =
       false;
 
   }
