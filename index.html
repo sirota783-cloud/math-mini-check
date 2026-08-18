@@ -36,6 +36,11 @@ button {
   cursor: pointer;
 }
 
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.65;
+}
+
 nav {
   margin-bottom: 14px;
 }
@@ -66,6 +71,18 @@ nav a {
   margin: 12px 0;
   font-size: 18px;
   font-weight: bold;
+}
+
+#ai_box {
+  display: none;
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid #ddd;
+}
+
+#grade_result {
+  margin-top: 10px;
+  line-height: 1.6;
 }
 </style>
 </head>
@@ -121,6 +138,20 @@ nav a {
 
 <p id="status"></p>
 
+<div id="ai_box">
+
+<p class="success">
+העבודה התקבלה. לאחר שווידאת שכל העמודים נשלחו, ניתן להתחיל את הבדיקה.
+</p>
+
+<button id="ai_grade">
+בדיקה עם AI וקבלת ציון
+</button>
+
+<div id="grade_result"></div>
+
+</div>
+
 </div>
 
 
@@ -158,13 +189,25 @@ quizDisplay.textContent =
   " | בוחן מספר " + QUIZ_ID;
 
 
+let lastSubmissionId = null;
+let lastStudentCode = "";
+let lastPin = "";
+
 
 document.getElementById("submit").onclick =
 async () => {
 
-
   const status =
     document.getElementById("status");
+
+  const aiBox =
+    document.getElementById("ai_box");
+
+  const gradeResult =
+    document.getElementById("grade_result");
+
+  const submitButton =
+    document.getElementById("submit");
 
 
   const studentCode =
@@ -189,6 +232,13 @@ async () => {
 
   status.className = "";
   status.textContent = "";
+
+  gradeResult.className = "";
+  gradeResult.textContent = "";
+
+  aiBox.style.display = "none";
+
+  lastSubmissionId = null;
 
 
   if (
@@ -232,8 +282,10 @@ async () => {
 
   try {
 
+    submitButton.disabled = true;
+
     status.textContent =
-      "מעלה את העבודה ובודק אותה אוטומטית...";
+      "מעלה את העבודה...";
 
 
     const form =
@@ -303,7 +355,6 @@ async () => {
       status.className =
         "error";
 
-
       status.textContent =
         data.error ||
         "שגיאה בשליחת העבודה.";
@@ -312,39 +363,35 @@ async () => {
     }
 
 
+    lastSubmissionId =
+      data.submission_id;
+
+
+    lastStudentCode =
+      studentCode;
+
+
+    lastPin =
+      pin;
+
+
     status.className =
       "success";
 
 
-    if (
-      data.status === "graded" &&
-      data.score !== null &&
-      data.score !== undefined
-    ) {
-
-      status.textContent =
-        "העבודה נבדקה. הציון: " +
-        data.score +
-        (
-          data.feedback
-          ? " — " + data.feedback
-          : ""
-        );
-
-    }
-
-    else {
-
-      status.textContent =
-        data.feedback ||
-        "העבודה התקבלה ונדרשת בדיקת מרצה.";
-
-    }
+    status.textContent =
+      "העבודה נשלחה בהצלחה. הועלו " +
+      files.length +
+      " תמונות.";
 
 
     document.getElementById(
       "files"
     ).value = "";
+
+
+    aiBox.style.display =
+      "block";
 
   }
 
@@ -361,7 +408,224 @@ async () => {
 
   }
 
+
+  finally {
+
+    submitButton.disabled = false;
+
+  }
+
 };
+
+
+
+document.getElementById("ai_grade").onclick =
+async () => {
+
+  const button =
+    document.getElementById("ai_grade");
+
+
+  const gradeResult =
+    document.getElementById(
+      "grade_result"
+    );
+
+
+  if (
+    !lastSubmissionId ||
+    !lastStudentCode ||
+    !lastPin
+  ) {
+
+    gradeResult.className =
+      "error";
+
+    gradeResult.textContent =
+      "לא נמצאה הגשה לבדיקה.";
+
+    return;
+  }
+
+
+  try {
+
+    button.disabled = true;
+
+
+    gradeResult.className = "";
+
+
+    gradeResult.textContent =
+      "הבדיקה מתבצעת. נא להמתין...";
+
+
+    const response =
+      await fetch(
+        API_BASE + "/student/grade",
+        {
+          method: "POST",
+
+          headers: {
+            "Content-Type":
+              "application/json"
+          },
+
+          body: JSON.stringify({
+
+            submission_id:
+              lastSubmissionId,
+
+            student_code:
+              lastStudentCode,
+
+            pin:
+              lastPin
+
+          })
+        }
+      );
+
+
+    let data = {};
+
+
+    try {
+
+      data =
+        await response.json();
+
+    }
+
+    catch (_) {}
+
+
+    if (!response.ok) {
+
+      gradeResult.className =
+        "error";
+
+
+      gradeResult.textContent =
+        data.error ||
+        "שגיאה בבדיקת AI.";
+
+
+      button.disabled = false;
+
+      return;
+    }
+
+
+    if (
+      data.status === "graded" &&
+      data.score !== null &&
+      data.score !== undefined
+    ) {
+
+      gradeResult.className =
+        "success";
+
+
+      gradeResult.innerHTML =
+        "הבדיקה הסתיימה.<br>" +
+
+        "ציון: <strong>" +
+        data.score +
+        "</strong>" +
+
+        (
+          data.feedback
+          ? "<br>הערה: " +
+            escapeHtml(
+              data.feedback
+            )
+          : ""
+        ) +
+
+        '<br><br>' +
+        '<a href="results.html">' +
+        'מעבר לתוצאות שלי' +
+        '</a>';
+
+
+      button.textContent =
+        "הבדיקה הסתיימה";
+
+    }
+
+
+    else {
+
+      gradeResult.className =
+        "error";
+
+
+      gradeResult.textContent =
+        data.feedback ||
+        "העבודה דורשת בדיקת מרצה.";
+
+
+      button.disabled =
+        false;
+
+    }
+
+  }
+
+
+  catch(error) {
+
+    console.error(error);
+
+
+    gradeResult.className =
+      "error";
+
+
+    gradeResult.textContent =
+      "שגיאת תקשורת.";
+
+
+    button.disabled =
+      false;
+
+  }
+
+};
+
+
+
+function escapeHtml(value) {
+
+  return String(value)
+
+    .replaceAll(
+      "&",
+      "&amp;"
+    )
+
+    .replaceAll(
+      "<",
+      "&lt;"
+    )
+
+    .replaceAll(
+      ">",
+      "&gt;"
+    )
+
+    .replaceAll(
+      '"',
+      "&quot;"
+    )
+
+    .replaceAll(
+      "'",
+      "&#039;"
+    );
+
+}
 
 </script>
 
