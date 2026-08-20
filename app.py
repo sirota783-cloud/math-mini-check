@@ -103,31 +103,39 @@ def response_output_text(payload):
     return "\n".join(chunks).strip()
 
 
-def openai_grade(problem, rubric_text, image_bytes):
+def openai_grade(problem, rubric_text, image_bytes, exam_file=None):
     if not OPENAI_API_KEY:
         raise RuntimeError("OPENAI_API_KEY is not configured")
 
     prompt = f"""
-You are grading a student's handwritten mathematics solution.
+You are grading a student's handwritten mathematics exam.
 
-Problem:
+The official exam/questions file is provided first when available.
+The images after it are the student's submitted work.
+
+Problem / exam description:
 {problem}
 
 Teacher grading instructions / rubric:
 {rubric_text}
 
-Grade only what is visible in the submitted images.
-Do not invent missing steps.
-Follow the teacher rubric exactly.
+IMPORTANT:
+Compare the student's work with the official exam questions.
+Grade the ENTIRE exam out of 100 according to the rubric.
+A missing question or subquestion receives 0 points.
+Never rescale the submitted part to 100.
+Do not invent answers that are not visible in the student's work.
+Accept any mathematically valid solution method.
 
 Return ONLY one JSON object with these keys:
-score: numeric score according to the rubric,
+score: numeric score from 0 to 100,
 feedback: short feedback for the student in Hebrew,
 confidence: number from 0 to 1,
 needs_teacher: true or false.
 
 Set needs_teacher=true if handwriting is unclear, pages seem missing,
-the answer is ambiguous, or you are not sufficiently confident.
+the correspondence between answers and questions is ambiguous,
+or you are not sufficiently confident.
 """
 
     content = [
@@ -137,6 +145,26 @@ the answer is ambiguous, or you are not sufficiently confident.
         }
     ]
 
+    # Official exam file
+    if exam_file:
+        exam_data, exam_mime, exam_name = exam_file
+        encoded_exam = base64.b64encode(exam_data).decode("ascii")
+
+        if exam_mime == "application/pdf":
+            content.append({
+                "type": "input_file",
+                "filename": exam_name,
+                "file_data": f"data:application/pdf;base64,{encoded_exam}",
+                "detail": "high"
+            })
+        else:
+            content.append({
+                "type": "input_image",
+                "image_url": f"data:{exam_mime};base64,{encoded_exam}",
+                "detail": "high"
+            })
+
+    # Student work
     for data, mime in image_bytes:
         encoded = base64.b64encode(data).decode("ascii")
         content.append({
@@ -193,8 +221,39 @@ the answer is ambiguous, or you are not sufficiently confident.
         "confidence": confidence,
         "needs_teacher": needs_teacher,
     }
+def load_exam_file(quiz_key):
+    """
+    Loads the official exam file from Supabase Storage.
+    Example:
+    v2::MATH::general::3  ->  MATH-3
+    """
 
+    parts = split_quiz_key(quiz_key)
 
+    course_id = parts.get("course_id", "")
+    quiz_id = parts.get("quiz_id", "")
+
+    if not course_id or not quiz_id:
+        return None
+
+    exam_code = f"{course_id}-{quiz_id}"
+
+    candidates = [
+        (f"exams/{exam_code}/questions.pdf", "application/pdf", "questions.pdf"),
+        (f"exams/{exam_code}/questions.png", "image/png", "questions.png"),
+        (f"exams/{exam_code}/questions.jpg", "image/jpeg", "questions.jpg"),
+        (f"exams/{exam_code}/questions.jpeg", "image/jpeg", "questions.jpeg"),
+    ]
+
+    for path, mime, filename in candidates:
+        try:
+            data = sb.storage.from_("submissions").download(path)
+            if data:
+                return (data, mime, filename)
+        except Exception:
+            pass
+
+    return None
 def auto_grade_submission(submission_id, quiz_key, uploaded_paths):
     """
     Returns the final public status and score.
@@ -256,11 +315,14 @@ def auto_grade_submission(submission_id, quiz_key, uploaded_paths):
 
             images.append((raw, mime))
 
-        grade = openai_grade(
-            problem=problem,
-            rubric_text=rubric_text,
-            image_bytes=images
-        )
+       exam_file = load_exam_file(quiz_key)
+
+grade = openai_grade(
+    problem=problem,
+    rubric_text=rubric_text,
+    image_bytes=images,
+    exam_file=exam_file
+)
 
         uncertain = (
             grade["needs_teacher"]
