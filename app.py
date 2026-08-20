@@ -193,7 +193,7 @@ or you are not sufficiently confident.
     )
 
     try:
-        with urllib.request.urlopen(req, timeout=25) as response:
+       with urllib.request.urlopen(req, timeout=90) as response:
             payload = json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as e:
         details = e.read().decode("utf-8", errors="replace")
