@@ -154,8 +154,7 @@ or you are not sufficiently confident.
             content.append({
                 "type": "input_file",
                 "filename": exam_name,
-                "file_data": f"data:application/pdf;base64,{encoded_exam}",
-                "detail": "high"
+                "file_data": f"data:application/pdf;base64,{encoded_exam}"
             })
         else:
             content.append({
@@ -194,7 +193,7 @@ or you are not sufficiently confident.
     )
 
     try:
-        with urllib.request.urlopen(req, timeout=120) as response:
+        with urllib.request.urlopen(req, timeout=25) as response:
             payload = json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as e:
         details = e.read().decode("utf-8", errors="replace")
@@ -269,26 +268,30 @@ def auto_grade_submission(submission_id, quiz_key, uploaded_paths):
             .data
         )
 
-        if not rubric_rows:
-            feedback = "העבודה התקבלה. עדיין לא הוגדרה בדיקה אוטומטית לבוחן זה."
-            sb.table("mini_check_submissions").update({
-                "status": "needs_teacher",
-                "score": None,
-                "feedback": feedback,
-            }).eq("id", submission_id).execute()
+        # The official exam PDF/image is enough to enable automatic grading.
+        # A teacher rubric, when present, overrides the default instructions.
+        exam_file = load_exam_file(quiz_key)
 
-            return {
-                "status": "needs_teacher",
-                "score": None,
-                "feedback": feedback,
-            }
+        if rubric_rows:
+            rubric_row = rubric_rows[0]
+            problem = rubric_row.get("problem", "") or "Use the attached official exam/questions file."
+            rubric_text = rubric_row.get("rubric", "").strip()
+        else:
+            problem = "Use the attached official exam/questions file."
+            rubric_text = ""
 
-        rubric_row = rubric_rows[0]
-        problem = rubric_row.get("problem", "")
-        rubric_text = rubric_row.get("rubric", "")
+        if not rubric_text:
+            rubric_text = (
+                "Grade the entire submitted exam out of 100. "
+                "Use the official exam/questions file as the source of the questions. "
+                "Give 0 points for questions or subquestions that were not answered. "
+                "Deduct points proportionally for mathematical errors and incomplete reasoning. "
+                "Accept any mathematically valid solution method. "
+                "Do not rescale a partially submitted exam to 100."
+            )
 
-        if not rubric_text.strip():
-            feedback = "העבודה התקבלה. חסרות הנחיות לבדיקה אוטומטית."
+        if exam_file is None and not rubric_rows:
+            feedback = "העבודה התקבלה. קובץ שאלות הבחינה לא נמצא ולכן נדרשת בדיקת מרצה."
             sb.table("mini_check_submissions").update({
                 "status": "needs_teacher",
                 "score": None,
@@ -314,8 +317,6 @@ def auto_grade_submission(submission_id, quiz_key, uploaded_paths):
             }.get(ext, "image/jpeg")
 
             images.append((raw, mime))
-
-        exam_file = load_exam_file(quiz_key)
 
         grade = openai_grade(
             problem=problem,
@@ -1128,14 +1129,40 @@ def teacher_exam_upload():
             + extension
         )
 
+        # Replace an older copy safely. Some storage client versions do not
+        # honor string-valued upsert consistently.
+        try:
+            sb.storage.from_("submissions").remove([file_path])
+        except Exception:
+            pass
+
         sb.storage.from_("submissions").upload(
             file_path,
             file_bytes,
             {
-                "content-type": file.content_type,
-                "upsert": "true"
+                "content-type": file.content_type or "application/octet-stream",
+                "upsert": "false"
             }
         )
+
+        # MATH-3 -> v2::MATH::general::3.  Register a default rubric so the
+        # uploaded official exam immediately enables automatic grading.
+        if "-" in exam_code:
+            course_id, quiz_id = exam_code.rsplit("-", 1)
+            if course_id and quiz_id:
+                quiz_key = make_quiz_key(course_id, "general", quiz_id)
+                sb.table("mini_check_rubrics").upsert({
+                    "quiz_id": quiz_key,
+                    "problem": "Use the attached official exam/questions file.",
+                    "rubric": (
+                        "Grade the entire submitted exam out of 100. "
+                        "Use the official exam/questions file as the source of the questions. "
+                        "Give 0 points for questions or subquestions that were not answered. "
+                        "Deduct points proportionally for mathematical errors and incomplete reasoning. "
+                        "Accept any mathematically valid solution method. "
+                        "Do not rescale a partially submitted exam to 100."
+                    )
+                }, on_conflict="quiz_id").execute()
 
         return jsonify(
             success=True,
