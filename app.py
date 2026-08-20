@@ -314,14 +314,15 @@ def auto_grade_submission(submission_id, quiz_key, uploaded_paths):
             }.get(ext, "image/jpeg")
 
             images.append((raw, mime))
-            exam_file = load_exam_file(quiz_key)
 
-grade = openai_grade(
-    problem=problem,
-    rubric_text=rubric_text,
-    image_bytes=images,
-    exam_file=exam_file
-)
+        exam_file = load_exam_file(quiz_key)
+
+        grade = openai_grade(
+            problem=problem,
+            rubric_text=rubric_text,
+            image_bytes=images,
+            exam_file=exam_file
+        )
 
         uncertain = (
             grade["needs_teacher"]
