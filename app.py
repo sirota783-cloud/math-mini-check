@@ -244,17 +244,17 @@ def load_exam_file(quiz_key):
         (f"exams/{exam_code}/questions.jpeg", "image/jpeg", "questions.jpeg"),
     ]
 
-   for path, mime, filename in candidates:
-    try:
-        data = sb.storage.from_("submissions").download(path)
-        if data:
-            print("EXAM FILE LOADED:", path, "bytes:", len(data), flush=True)
-            return (data, mime, filename)
-    except Exception as e:
-        print("EXAM FILE ERROR:", path, repr(e), flush=True)
+       for path, mime, filename in candidates:
+        try:
+            data = sb.storage.from_("submissions").download(path)
+            if data:
+                print("EXAM FILE LOADED:", path, "bytes:", len(data), flush=True)
+                return (data, mime, filename)
+        except Exception as e:
+            print("EXAM FILE ERROR:", path, repr(e), flush=True)
 
-print("EXAM FILE NOT FOUND FOR:", quiz_key, flush=True)
-return None 
+    print("EXAM FILE NOT FOUND FOR:", quiz_key, flush=True)
+    return None
     
 def auto_grade_submission(submission_id, quiz_key, uploaded_paths):
     """
