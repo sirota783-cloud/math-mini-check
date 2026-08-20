@@ -244,7 +244,7 @@ def load_exam_file(quiz_key):
         (f"exams/{exam_code}/questions.jpeg", "image/jpeg", "questions.jpeg"),
     ]
 
-       for path, mime, filename in candidates:
+    for path, mime, filename in candidates:
         try:
             data = sb.storage.from_("submissions").download(path)
             if data:
