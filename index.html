@@ -530,18 +530,29 @@ async function findExistingSubmission() {
     status.textContent =
       "העבודה נמצאה.";
 
-    aiButton.disabled =
-      true;
-
-    aiButton.textContent =
-      "נדרשת בדיקת מרצה";
-
     gradeResult.className =
       "error";
 
     gradeResult.textContent =
       data.feedback ||
       "העבודה דורשת בדיקת מרצה.";
+
+    const technicalFailureMessage =
+      "העבודה התקבלה. הבדיקה האוטומטית לא הסתיימה ולכן נדרשת בדיקת מרצה.";
+
+    if (
+      currentStatus === "needs_teacher" &&
+      (data.feedback || "") === technicalFailureMessage
+    ) {
+      aiButton.disabled = false;
+      aiButton.textContent =
+        "נסה שוב בדיקה עם AI";
+    }
+    else {
+      aiButton.disabled = true;
+      aiButton.textContent =
+        "נדרשת בדיקת מרצה";
+    }
 
   }
 
@@ -1117,6 +1128,8 @@ async () => {
 
 
       button.disabled = false;
+      button.textContent =
+        "נסה שוב בדיקה עם AI";
 
       return;
     }
@@ -1176,12 +1189,26 @@ async () => {
         data.feedback ||
         "העבודה דורשת בדיקת מרצה.";
 
+      const technicalFailureMessage =
+        "העבודה התקבלה. הבדיקה האוטומטית לא הסתיימה ולכן נדרשת בדיקת מרצה.";
 
-      button.textContent =
-        "הבדיקה הסתיימה";
+      if (
+        data.status === "needs_teacher" &&
+        (data.feedback || "") === technicalFailureMessage
+      ) {
+        button.textContent =
+          "נסה שוב בדיקה עם AI";
 
-      button.disabled =
-        true;
+        button.disabled =
+          false;
+      }
+      else {
+        button.textContent =
+          "הבדיקה הסתיימה";
+
+        button.disabled =
+          true;
+      }
 
     }
 
@@ -1198,11 +1225,14 @@ async () => {
 
 
     gradeResult.textContent =
-      "שגיאת תקשורת.";
+      "שגיאת תקשורת. ניתן לנסות שוב.";
 
 
     button.disabled =
-      true;
+      false;
+
+    button.textContent =
+      "נסה שוב בדיקה עם AI";
 
   }
 
