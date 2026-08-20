@@ -333,7 +333,7 @@ def auto_grade_submission(submission_id, quiz_key, uploaded_paths):
 
         if uncertain:
             status = "needs_teacher"
-            score = None
+            score = grade["score"]
             feedback = (
                 grade["feedback"]
                 or "העבודה התקבלה ונדרשת בדיקת מרצה."
