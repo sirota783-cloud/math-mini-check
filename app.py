@@ -788,12 +788,25 @@ def student_grade():
     if row.get("student_code") != code or row.get("pin_hash") != phash(code, pin):
         return jsonify(error="קוד סטודנט או PIN שגויים"), 403
 
-    if row.get("status") == "graded" and row.get("score") is not None:
+    current_status = row.get("status") or "submitted"
+
+    if current_status == "graded" and row.get("score") is not None:
         return jsonify(
             submission_id=submission_id,
             status="graded",
             score=row.get("score"),
             feedback=row.get("feedback") or ""
+        )
+
+    # A student gets only one AI attempt per submission.  Returning the
+    # stored result here avoids another paid OpenAI request after an
+    # uncertain result, a technical failure, or a repeated button click.
+    if current_status != "submitted":
+        return jsonify(
+            submission_id=submission_id,
+            status=current_status,
+            score=row.get("score"),
+            feedback=row.get("feedback") or "הבדיקה כבר הופעלה עבור הגשה זו."
         )
 
     raw_file_path = row.get("file_path") or ""
@@ -817,10 +830,29 @@ def student_grade():
         return jsonify(error="לא נמצאו קבצים לבדיקה"), 400
 
     try:
-        sb.table("mini_check_submissions").update({
+        # Claim the submission atomically.  The status condition also blocks
+        # two near-simultaneous requests from starting two paid AI checks.
+        claim = sb.table("mini_check_submissions").update({
             "status": "grading",
             "score": None
-        }).eq("id", submission_id).execute()
+        }).eq("id", submission_id).eq("status", "submitted").select("id").execute()
+
+        if not claim.data:
+            latest_rows = (
+                sb.table("mini_check_submissions")
+                .select("status,score,feedback")
+                .eq("id", submission_id)
+                .limit(1)
+                .execute()
+                .data
+            )
+            latest = latest_rows[0] if latest_rows else {}
+            return jsonify(
+                submission_id=submission_id,
+                status=latest.get("status") or "grading",
+                score=latest.get("score"),
+                feedback=latest.get("feedback") or "הבדיקה כבר הופעלה עבור הגשה זו."
+            )
 
         grade_result = auto_grade_submission(
             submission_id=submission_id,
