@@ -91,6 +91,36 @@ th,td{
   margin:0 auto;
 }
 
+.image-wrap{
+  position:relative;
+  display:block;
+  width:fit-content;
+  max-width:100%;
+  margin:0 auto;
+}
+
+.error-marker{
+  position:absolute;
+  border:3px solid #d40000;
+  background:transparent;
+  box-sizing:border-box;
+  pointer-events:none;
+  z-index:2;
+}
+
+.error-marker span{
+  position:absolute;
+  right:0;
+  bottom:100%;
+  max-width:260px;
+  padding:4px 7px;
+  background:#d40000;
+  color:#fff;
+  font-size:14px;
+  font-weight:bold;
+  white-space:nowrap;
+}
+
 .page-label{
   font-weight:bold;
   margin-bottom:8px;
@@ -716,10 +746,14 @@ function showSubmission(
             עמוד ${index + 1}
           </div>
 
-          <img
-            src="${escapeHtml(url)}"
-            alt="עמוד ${index + 1}"
-          >
+          <div
+            class="image-wrap"
+            id="pageImageWrap${index + 1}">
+            <img
+              src="${escapeHtml(url)}"
+              alt="עמוד ${index + 1}"
+            >
+          </div>
 
         </div>
 
@@ -872,9 +906,21 @@ function showSubmission(
 
       if (!r.ok) {
 
+        document.getElementById(
+          "submissionScore"
+        ).value = "";
+
+        document.getElementById(
+          "submissionFeedback"
+        ).textContent = "";
+
+        renderErrorMarkers([]);
+
         throw new Error(
-          data.error ||
-          "AI check failed"
+          (data.error || "AI check failed") +
+          (data.expected_exam_code
+            ? " Expected exam: " + data.expected_exam_code
+            : "")
         );
       }
 
@@ -892,6 +938,10 @@ function showSubmission(
 
       const feedbackText =
         data.feedback ?? "";
+
+      renderErrorMarkers(
+        Array.isArray(data.errors) ? data.errors : []
+      );
 
 
       feedbackBox.innerHTML =
@@ -946,7 +996,13 @@ function showSubmission(
 
 
       status.textContent =
-        "בדיקת AI הסתיימה";
+        data.exam_loaded
+          ? "בדיקת AI הסתיימה. שאלות הבחינה המלאות שימשו לבדיקה: " +
+            String(data.exam_code || "")
+          : "בדיקת AI הסתיימה, אך קובץ שאלות הבחינה לא נמצא.";
+
+      status.className =
+        data.exam_loaded ? "success" : "error";
 
     }
 
@@ -955,7 +1011,10 @@ function showSubmission(
       console.error(e);
 
       status.textContent =
-        "שגיאה בבדיקת AI";
+        "שגיאה בבדיקת AI: " +
+        String(e?.message || e);
+
+      status.className = "error";
 
     }
 
@@ -1087,6 +1146,48 @@ function showSubmission(
     behavior: "smooth"
   });
 
+}
+
+
+function renderErrorMarkers(errors) {
+
+  document.querySelectorAll(
+    ".error-marker"
+  ).forEach(marker => marker.remove());
+
+  for (const error of errors) {
+
+    const page = Math.trunc(Number(error.page));
+    const wrap = document.getElementById(
+      "pageImageWrap" + page
+    );
+
+    if (!wrap) continue;
+
+    const values = [
+      Number(error.x),
+      Number(error.y),
+      Number(error.width),
+      Number(error.height)
+    ];
+
+    if (!values.every(Number.isFinite)) continue;
+
+    const [x, y, width, height] = values;
+    if (width <= 0 || height <= 0) continue;
+
+    const marker = document.createElement("div");
+    marker.className = "error-marker";
+    marker.style.left = Math.max(0, Math.min(100, x)) + "%";
+    marker.style.top = Math.max(0, Math.min(100, y)) + "%";
+    marker.style.width = Math.max(0, Math.min(width, 100 - x)) + "%";
+    marker.style.height = Math.max(0, Math.min(height, 100 - y)) + "%";
+
+    const label = document.createElement("span");
+    label.textContent = String(error.label || "טעות");
+    marker.appendChild(label);
+    wrap.appendChild(marker);
+  }
 }
 
 
