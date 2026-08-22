@@ -984,7 +984,13 @@ function showSubmission(
 
 
       status.textContent =
-        "בדיקת AI הסתיימה";
+        data.exam_loaded
+          ? "בדיקת AI הסתיימה. שאלות הבחינה המלאות שימשו לבדיקה: " +
+            String(data.exam_code || "")
+          : "בדיקת AI הסתיימה, אך קובץ שאלות הבחינה לא נמצא.";
+
+      status.className =
+        data.exam_loaded ? "success" : "error";
 
     }
 
