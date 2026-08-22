@@ -66,6 +66,46 @@ const SUPABASE_URL =
 const SUPABASE_KEY =
 "sb_publishable_gsoH21Rei_f5rQyrjXyXPQ_8oI8LKR0";
 
+const COURSE_LABELS = {
+  MATH: "מתמטיקה — קורס הכנה",
+  DISCRETE: "מתמטיקה בדידה",
+  general: "כללי"
+};
+
+function splitQuizId(value) {
+  const raw = String(value ?? "").trim();
+
+  if (raw.startsWith("v2::")) {
+    const parts = raw.split("::");
+    if (parts.length >= 4) {
+      const rawCourse = parts[1] || "general";
+      const lowerCourse = rawCourse.toLowerCase();
+      const courseId =
+        ["math", "mathematics", "prep", "preparatory"].includes(lowerCourse)
+          ? "MATH"
+          : ["discrete", "discrete-math", "discrete_math", "בדידה"].includes(lowerCourse)
+            ? "DISCRETE"
+            : rawCourse;
+
+      return {
+        course_id: courseId,
+        quiz_id: parts.slice(3).join("::") || "1"
+      };
+    }
+  }
+
+  return {course_id: "general", quiz_id: raw};
+}
+
+function escapeHtml(value) {
+  return String(value)
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
+}
+
 
 document.getElementById("load").onclick = async () => {
 
@@ -123,6 +163,10 @@ document.getElementById("load").onclick = async () => {
 
     out.innerHTML = results.map(x => {
 
+      const quiz = splitQuizId(x.quiz_id);
+      const courseName =
+        COURSE_LABELS[quiz.course_id] || quiz.course_id;
+
       const score =
         x.score === null
         ? "בבדיקה"
@@ -130,14 +174,14 @@ document.getElementById("load").onclick = async () => {
 
       const feedback =
         x.feedback
-        ? `<div>${x.feedback}</div>`
+        ? `<div>${escapeHtml(x.feedback)}</div>`
         : "";
 
       return `
         <div class="result">
-          <strong>בוחן ${x.quiz_id}</strong>
-          <div>ציון: ${score}</div>
-          <div>סטטוס: ${x.status}</div>
+          <strong>${escapeHtml(courseName)} — תרגול ${escapeHtml(quiz.quiz_id)}</strong>
+          <div>ציון: ${escapeHtml(score)}</div>
+          <div>סטטוס: ${escapeHtml(x.status)}</div>
           ${feedback}
         </div>
       `;

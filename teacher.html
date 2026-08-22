@@ -33,7 +33,7 @@ body{
   margin:14px 0;
 }
 
-input,textarea,button{
+input,textarea,select,button{
   font-size:16px;
   padding:10px;
   width:100%;
@@ -118,6 +118,18 @@ th,td{
 
 <button id="load">הצגת עבודות</button>
 
+<label for="course_filter"><strong>מקצוע:</strong></label>
+<select id="course_filter">
+  <option value="MATH">מתמטיקה — קורס הכנה</option>
+  <option value="DISCRETE">מתמטיקה בדידה</option>
+  <option value="ALL">כל המקצועות</option>
+</select>
+
+<label for="quiz_filter"><strong>מספר תרגול:</strong></label>
+<select id="quiz_filter">
+  <option value="ALL">כל התרגולים</option>
+</select>
+
 <p id="status"></p>
 
 </div>
@@ -164,6 +176,69 @@ const FILE_URL_ENDPOINT =
   "https://math-mini-check.onrender.com/teacher/file-url";
 
 
+const COURSE_LABELS = {
+  MATH: "מתמטיקה — קורס הכנה",
+  DISCRETE: "מתמטיקה בדידה",
+  general: "כללי",
+  legacy: "הגשות ישנות"
+  ,ALL: "כל המקצועות"
+};
+
+
+const quizFilter = document.getElementById("quiz_filter");
+
+for (let number = 1; number <= 15; number += 1) {
+  const option = document.createElement("option");
+  option.value = String(number);
+  option.textContent = "תרגול " + number;
+  quizFilter.appendChild(option);
+}
+
+
+function normalizeCourseId(value) {
+  const raw = String(value ?? "").trim();
+  const lower = raw.toLowerCase();
+
+  if (["math", "mathematics", "prep", "preparatory"].includes(lower)) {
+    return "MATH";
+  }
+
+  if (["discrete", "discrete-math", "discrete_math", "בדידה"].includes(lower)) {
+    return "DISCRETE";
+  }
+
+  return raw || "general";
+}
+
+
+function splitQuizId(value) {
+  const raw = String(value ?? "").trim();
+
+  if (raw.startsWith("v2::")) {
+    const parts = raw.split("::");
+
+    if (parts.length >= 4) {
+      return {
+        course_id: normalizeCourseId(parts[1]),
+        group_id: parts[2] || "general",
+        quiz_id: normalizeQuizId(parts.slice(3).join("::"))
+      };
+    }
+  }
+
+  return {
+    course_id: "legacy",
+    group_id: "general",
+    quiz_id: normalizeQuizId(raw)
+  };
+}
+
+
+function courseLabel(courseId) {
+  return COURSE_LABELS[courseId] || courseId;
+}
+
+
 function normalizeQuizId(value) {
 
   const q =
@@ -190,17 +265,26 @@ function buildSubmissionGroups(rows) {
     const studentCode =
       String(row.student_code ?? "").trim();
 
-    const quizId =
-      normalizeQuizId(row.quiz_id);
+    const quizParts = splitQuizId(row.quiz_id);
+
+    const quizId = quizParts.quiz_id;
+
+    const courseId = quizParts.course_id;
+
+    const groupId = quizParts.group_id;
 
     const key =
-      studentCode + "||" + quizId;
+      courseId + "||" + groupId + "||" +
+      quizId + "||" + studentCode;
 
     if (!groups.has(key)) {
 
       groups.set(key, {
         student_code: studentCode,
+        course_id: courseId,
+        group_id: groupId,
         quiz_id: quizId,
+        quiz_key: String(row.quiz_id ?? "").trim(),
         rows: []
       });
 
@@ -411,18 +495,32 @@ document.getElementById("load").onclick = async () => {
     const groups =
       buildSubmissionGroups(rows);
 
+    const selectedCourse =
+      document.getElementById("course_filter").value;
+
+    const selectedQuiz =
+      document.getElementById("quiz_filter").value;
+
+    const visibleGroups = groups.filter(group =>
+      (selectedCourse === "ALL" || group.course_id === selectedCourse) &&
+      (selectedQuiz === "ALL" || group.quiz_id === selectedQuiz)
+    );
+
     status.className =
       "success";
 
     status.textContent =
       "נמצאו " +
-      groups.length +
+      visibleGroups.length +
       " עבודות מאוחדות מתוך " +
       rows.length +
-      " הגשות.";
+      " הגשות. מקצוע: " +
+      courseLabel(selectedCourse) +
+      (selectedQuiz === "ALL" ? "" : " | תרגול " + selectedQuiz) +
+      ".";
 
 
-    groups.forEach(group => {
+    visibleGroups.forEach(group => {
 
       const div =
         document.createElement(
@@ -446,6 +544,7 @@ document.getElementById("load").onclick = async () => {
 
       const historicalNote =
         (
+          group.course_id === "legacy" &&
           group.quiz_id === "1" &&
           sourceQuizIds.some(
             q => q !== "1"
@@ -462,8 +561,14 @@ document.getElementById("load").onclick = async () => {
       div.innerHTML = `
 
         <h3>
-          בוחן ${escapeHtml(group.quiz_id || "")}
+          ${escapeHtml(courseLabel(group.course_id))} —
+          תרגול ${escapeHtml(group.quiz_id || "")}
         </h3>
+
+        <p>
+          <strong>קבוצה:</strong>
+          ${escapeHtml(group.group_id || "")}
+        </p>
 
         <p>
           <strong>קוד סטודנט:</strong>
@@ -634,7 +739,12 @@ function showSubmission(
     </p>
 
     <p>
-      <strong>בוחן:</strong>
+      <strong>מקצוע:</strong>
+      ${escapeHtml(courseLabel(group.course_id))}
+    </p>
+
+    <p>
+      <strong>תרגול:</strong>
       ${escapeHtml(group.quiz_id || "")}
     </p>
 
@@ -752,7 +862,7 @@ function showSubmission(
                   urls,
 
                 quiz_id:
-                  group.quiz_id
+                  group.quiz_key
               })
           }
         );

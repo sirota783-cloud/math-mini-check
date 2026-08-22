@@ -24,7 +24,7 @@ body {
   margin: 14px 0;
 }
 
-input, button {
+input, select, button {
   font-size: 16px;
   padding: 10px;
   width: 100%;
@@ -121,6 +121,15 @@ nav a {
   placeholder="קוד PIN"
 >
 
+<label for="course_select"><strong>מקצוע:</strong></label>
+<select id="course_select">
+  <option value="MATH">מתמטיקה — קורס הכנה</option>
+  <option value="DISCRETE">מתמטיקה בדידה</option>
+</select>
+
+<label for="quiz_select"><strong>מספר תרגול:</strong></label>
+<select id="quiz_select"></select>
+
 <div class="quiz-box" id="quiz_display">
 טוען פרטי בוחן...
 </div>
@@ -176,14 +185,72 @@ const params =
   );
 
 
-const COURSE_ID =
-  params.get("course") || "general";
+let COURSE_ID =
+  params.get("course") || "MATH";
 
 const GROUP_ID =
   params.get("group") || "general";
 
-const QUIZ_ID =
+let QUIZ_ID =
   params.get("quiz") || "1";
+
+
+const COURSE_LABELS = {
+  MATH: "מתמטיקה — קורס הכנה",
+  DISCRETE: "מתמטיקה בדידה",
+  general: "כללי"
+};
+
+
+const courseSelect =
+  document.getElementById("course_select");
+
+if (![...courseSelect.options].some(
+  option => option.value === COURSE_ID
+)) {
+  const option = document.createElement("option");
+  option.value = COURSE_ID;
+  option.textContent = COURSE_ID;
+  courseSelect.appendChild(option);
+}
+
+courseSelect.value = COURSE_ID;
+
+
+const quizSelect =
+  document.getElementById("quiz_select");
+
+for (let number = 1; number <= 15; number += 1) {
+  const option = document.createElement("option");
+  option.value = String(number);
+  option.textContent = "תרגול " + number;
+  quizSelect.appendChild(option);
+}
+
+if (![...quizSelect.options].some(
+  option => option.value === QUIZ_ID
+)) {
+  const option = document.createElement("option");
+  option.value = QUIZ_ID;
+  option.textContent = "תרגול " + QUIZ_ID;
+  quizSelect.appendChild(option);
+}
+
+quizSelect.value = QUIZ_ID;
+
+
+function openSelectedPractice() {
+  const nextCourse = courseSelect.value;
+  const nextQuiz = quizSelect.value;
+
+  window.location.href =
+    "index.html?course=" + encodeURIComponent(nextCourse) +
+    "&group=" + encodeURIComponent(GROUP_ID) +
+    "&quiz=" + encodeURIComponent(nextQuiz);
+}
+
+courseSelect.addEventListener("change", openSelectedPractice);
+quizSelect.addEventListener("change", openSelectedPractice);
 
 
 document.getElementById("submit_link").href =
@@ -202,9 +269,9 @@ const quizDisplay =
 
 
 quizDisplay.textContent =
-  "מקצוע: " + COURSE_ID +
+  "מקצוע: " + (COURSE_LABELS[COURSE_ID] || COURSE_ID) +
   " | קבוצה: " + GROUP_ID +
-  " | בוחן מספר " + QUIZ_ID;
+  " | תרגול מספר " + QUIZ_ID;
 
 
 let lastSubmissionId = null;
