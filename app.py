@@ -835,7 +835,7 @@ def student_grade():
         claim = sb.table("mini_check_submissions").update({
             "status": "grading",
             "score": None
-        }).eq("id", submission_id).eq("status", "submitted").select("id").execute()
+        }).eq("id", submission_id).eq("status", "submitted").execute()
 
         if not claim.data:
             latest_rows = (
