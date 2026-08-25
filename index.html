@@ -128,7 +128,23 @@ nav a {
 </select>
 
 <label for="quiz_select"><strong>מספר תרגול:</strong></label>
-<select id="quiz_select"></select>
+<select id="quiz_select">
+  <option value="1">תרגול 1</option>
+  <option value="2">תרגול 2</option>
+  <option value="3">תרגול 3</option>
+  <option value="4">תרגול 4</option>
+  <option value="5">תרגול 5</option>
+  <option value="6">תרגול 6</option>
+  <option value="7">תרגול 7</option>
+  <option value="8">תרגול 8</option>
+  <option value="9">תרגול 9</option>
+  <option value="10">תרגול 10</option>
+  <option value="11">תרגול 11</option>
+  <option value="12">תרגול 12</option>
+  <option value="13">תרגול 13</option>
+  <option value="14">תרגול 14</option>
+  <option value="15">תרגול 15</option>
+</select>
 
 <div class="quiz-box" id="quiz_display">
 טוען פרטי בוחן...
@@ -205,9 +221,24 @@ const COURSE_LABELS = {
 const courseSelect =
   document.getElementById("course_select");
 
-if (![...courseSelect.options].some(
-  option => option.value === COURSE_ID
-)) {
+
+function selectHasValue(select, value) {
+
+  for (
+    let index = 0;
+    index < select.options.length;
+    index += 1
+  ) {
+    if (select.options[index].value === value) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+
+if (!selectHasValue(courseSelect, COURSE_ID)) {
   const option = document.createElement("option");
   option.value = COURSE_ID;
   option.textContent = COURSE_ID;
@@ -220,16 +251,7 @@ courseSelect.value = COURSE_ID;
 const quizSelect =
   document.getElementById("quiz_select");
 
-for (let number = 1; number <= 15; number += 1) {
-  const option = document.createElement("option");
-  option.value = String(number);
-  option.textContent = "תרגול " + number;
-  quizSelect.appendChild(option);
-}
-
-if (![...quizSelect.options].some(
-  option => option.value === QUIZ_ID
-)) {
+if (!selectHasValue(quizSelect, QUIZ_ID)) {
   const option = document.createElement("option");
   option.value = QUIZ_ID;
   option.textContent = "תרגול " + QUIZ_ID;
