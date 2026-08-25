@@ -861,14 +861,55 @@ function showSubmission(
   );
 
 
-  document.getElementById(
-    "aiCheckSubmission"
-  ).onclick = async () => {
+  const aiCheckButton =
+    viewer.querySelector(
+      "#aiCheckSubmission"
+    );
 
-    const status =
-      document.getElementById(
-        "aiCheckStatus"
-      );
+  const aiCheckStatus =
+    viewer.querySelector(
+      "#aiCheckStatus"
+    );
+
+  const submissionScore =
+    viewer.querySelector(
+      "#submissionScore"
+    );
+
+  const submissionFeedback =
+    viewer.querySelector(
+      "#submissionFeedback"
+    );
+
+  const closeSubmissionButton =
+    viewer.querySelector(
+      "#closeSubmission"
+    );
+
+  let aiCheckInProgress = false;
+  let aiCheckCompleted = false;
+
+
+  aiCheckButton.onclick = async () => {
+
+    if (
+      aiCheckInProgress ||
+      aiCheckCompleted
+    ) {
+      return;
+    }
+
+    aiCheckInProgress = true;
+    aiCheckButton.disabled = true;
+    aiCheckButton.setAttribute(
+      "aria-busy",
+      "true"
+    );
+    aiCheckButton.textContent =
+      "בדיקת AI מתבצעת...";
+    closeSubmissionButton.disabled = true;
+
+    const status = aiCheckStatus;
 
     status.textContent =
       "AI בודק את כל התמונות יחד...";
@@ -906,13 +947,9 @@ function showSubmission(
 
       if (!r.ok) {
 
-        document.getElementById(
-          "submissionScore"
-        ).value = "";
+        submissionScore.value = "";
 
-        document.getElementById(
-          "submissionFeedback"
-        ).textContent = "";
+        submissionFeedback.textContent = "";
 
         renderErrorMarkers([]);
 
@@ -925,16 +962,12 @@ function showSubmission(
       }
 
 
-      document.getElementById(
-        "submissionScore"
-      ).value =
+      submissionScore.value =
         data.score ?? "";
 
 
       const feedbackBox =
-        document.getElementById(
-          "submissionFeedback"
-        );
+        submissionFeedback;
 
       const feedbackText =
         data.feedback ?? "";
@@ -1004,6 +1037,10 @@ function showSubmission(
       status.className =
         data.exam_loaded ? "success" : "error";
 
+      aiCheckCompleted = true;
+      aiCheckButton.textContent =
+        "בדיקת AI הושלמה";
+
     }
 
     catch (e) {
@@ -1015,6 +1052,22 @@ function showSubmission(
         String(e?.message || e);
 
       status.className = "error";
+
+    }
+
+    finally {
+
+      aiCheckInProgress = false;
+      aiCheckButton.removeAttribute(
+        "aria-busy"
+      );
+      closeSubmissionButton.disabled = false;
+
+      if (!aiCheckCompleted) {
+        aiCheckButton.disabled = false;
+        aiCheckButton.textContent =
+          "בדיקה עם AI";
+      }
 
     }
 
