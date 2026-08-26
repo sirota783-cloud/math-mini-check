@@ -89,6 +89,11 @@ nav a {
   background: #fff3f3;
   border: 1px solid #c55;
 }
+
+#ai_grade,
+#delete_submission {
+  display: none !important;
+}
 </style>
 </head>
 
@@ -171,7 +176,7 @@ nav a {
 <div id="ai_box">
 
 <p class="success">
-העבודה התקבלה. לאחר שווידאת שכל העמודים נשלחו, ניתן להתחיל את הבדיקה.
+העבודה התקבלה. הבדיקה האוטומטית מתחילה כעת.
 </p>
 
 <button id="ai_grade">
@@ -547,9 +552,11 @@ async function findExistingSubmission() {
       deleteButton.style.display =
         "block";
 
-      gradeResult.textContent = "";
+    gradeResult.textContent = "";
 
-      return;
+    window.setTimeout(() => aiButton.click(), 0);
+
+    return;
     }
 
     deleteButton.disabled =
@@ -959,6 +966,15 @@ async () => {
 
     submitButton.disabled =
       true;
+
+    gradeResult.className = "";
+    gradeResult.textContent =
+      "העבודה התקבלה. הבדיקה האוטומטית מתחילה...";
+
+    window.setTimeout(
+      () => aiButton.click(),
+      0
+    );
 
   }
 
