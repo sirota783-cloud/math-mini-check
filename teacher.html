@@ -144,7 +144,7 @@ th,td{
 <a href="index.html">← חזרה לדף ההגשה</a>
 </p>
 
-<div class="card">
+<div class="card" id="login_card">
 
 <h2>כניסת מרצה</h2>
 
@@ -153,6 +153,13 @@ th,td{
   type="password"
   placeholder="סיסמת מרצה"
 >
+
+<button id="teacher_login">כניסה</button>
+<button id="teacher_logout" style="display:none">יציאה</button>
+
+<p id="login_status"></p>
+
+<div id="teacher_controls" style="display:none">
 
 <button id="load">הצגת עבודות</button>
 
@@ -185,7 +192,9 @@ th,td{
 
 </div>
 
-<div class="card">
+</div>
+
+<div class="card" id="protected_card" style="display:none">
 
 <h2>העלאת שאלות הבחינה</h2>
 
@@ -213,7 +222,7 @@ th,td{
 
 </div>
 
-<div id="works"></div>
+<div id="works" style="display:none"></div>
 
 <script>
 
@@ -225,6 +234,104 @@ const SUPABASE_KEY =
 
 const FILE_URL_ENDPOINT =
   "https://math-mini-check.onrender.com/teacher/file-url";
+
+const TEACHER_SESSION_KEY =
+  "math_mini_check_teacher_session";
+
+function showTeacherPanel(password) {
+  document.getElementById("teacher_password").value = password;
+  document.getElementById("teacher_password").style.display = "none";
+  document.getElementById("teacher_login").style.display = "none";
+  document.getElementById("teacher_logout").style.display = "block";
+  document.getElementById("teacher_controls").style.display = "block";
+  document.getElementById("protected_card").style.display = "block";
+  document.getElementById("works").style.display = "block";
+  document.getElementById("login_status").className = "success";
+  document.getElementById("login_status").textContent = "הכניסה הצליחה";
+}
+
+function hideTeacherPanel() {
+  document.getElementById("teacher_password").value = "";
+  document.getElementById("teacher_password").style.display = "block";
+  document.getElementById("teacher_login").style.display = "block";
+  document.getElementById("teacher_logout").style.display = "none";
+  document.getElementById("teacher_controls").style.display = "none";
+  document.getElementById("protected_card").style.display = "none";
+  document.getElementById("works").style.display = "none";
+  document.getElementById("works").innerHTML = "";
+  document.getElementById("login_status").textContent = "";
+  document.getElementById("status").textContent = "";
+}
+
+async function validateTeacherPassword(password) {
+  const response = await fetch(
+    SUPABASE_URL + "/rest/v1/rpc/get_teacher_submissions",
+    {
+      method: "POST",
+      headers: {
+        "apikey": SUPABASE_KEY,
+        "Authorization": "Bearer " + SUPABASE_KEY,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({p_teacher_password: password})
+    }
+  );
+  return response.ok;
+}
+
+document.getElementById("teacher_login").onclick = async () => {
+  const password = document.getElementById("teacher_password").value.trim();
+  const loginStatus = document.getElementById("login_status");
+
+  if (!password) {
+    loginStatus.className = "error";
+    loginStatus.textContent = "יש להזין סיסמת מרצה.";
+    return;
+  }
+
+  loginStatus.className = "";
+  loginStatus.textContent = "בודק...";
+  document.getElementById("teacher_login").disabled = true;
+
+  try {
+    if (!await validateTeacherPassword(password)) {
+      loginStatus.className = "error";
+      loginStatus.textContent = "סיסמה שגויה.";
+      return;
+    }
+
+    sessionStorage.setItem(TEACHER_SESSION_KEY, password);
+    showTeacherPanel(password);
+  } catch (error) {
+    console.error(error);
+    loginStatus.className = "error";
+    loginStatus.textContent = "שגיאת תקשורת.";
+  } finally {
+    document.getElementById("teacher_login").disabled = false;
+  }
+};
+
+document.getElementById("teacher_logout").onclick = () => {
+  sessionStorage.removeItem(TEACHER_SESSION_KEY);
+  hideTeacherPanel();
+};
+
+window.addEventListener("load", async () => {
+  const savedPassword = sessionStorage.getItem(TEACHER_SESSION_KEY) || "";
+  if (!savedPassword) return;
+
+  try {
+    if (await validateTeacherPassword(savedPassword)) {
+      showTeacherPanel(savedPassword);
+    } else {
+      sessionStorage.removeItem(TEACHER_SESSION_KEY);
+      hideTeacherPanel();
+    }
+  } catch (error) {
+    console.error(error);
+    hideTeacherPanel();
+  }
+});
 
 
 const COURSE_LABELS = {
