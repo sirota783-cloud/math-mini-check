@@ -125,6 +125,14 @@ th,td{
   font-weight:bold;
   margin-bottom:8px;
 }
+.summary{display:flex;flex-wrap:wrap;gap:8px;margin:12px 0}
+.counter,.status-badge{display:inline-block;border-radius:999px;padding:5px 10px;font-weight:bold}
+.counter{background:#eef2f7}
+.status-submitted{background:#fff3cd;color:#664d03}
+.status-grading{background:#cfe2ff;color:#084298}
+.status-graded{background:#d1e7dd;color:#0f5132}
+.status-needs_teacher{background:#ffe5d0;color:#7a3500}
+.status-error{background:#f8d7da;color:#842029}
 </style>
 </head>
 
@@ -159,6 +167,19 @@ th,td{
 <select id="quiz_filter">
   <option value="ALL">כל התרגולים</option>
 </select>
+
+<label for="status_filter"><strong>מצב בדיקה:</strong></label>
+<select id="status_filter">
+  <option value="ALL">כל העבודות</option>
+  <option value="UNGRADED">ללא ציון</option>
+  <option value="submitted">לא נבדק</option>
+  <option value="grading">בבדיקה</option>
+  <option value="needs_teacher">לבדיקת מרצה</option>
+  <option value="graded">נבדק</option>
+  <option value="error">שגיאה</option>
+</select>
+
+<div id="summary" class="summary"></div>
 
 <p id="status"></p>
 
@@ -355,6 +376,46 @@ function groupScoreText(group) {
   return "יש ציונים שונים בין חלקי ההגשה";
 }
 
+function normalizedStatus(row) {
+  const value = String(row.status ?? "").trim().toLowerCase();
+  if (value === "graded" && row.score !== null && row.score !== undefined) return "graded";
+  if (["submitted", "grading", "needs_teacher", "error"].includes(value)) return value;
+  return row.score !== null && row.score !== undefined ? "graded" : "submitted";
+}
+
+function groupStatus(group) {
+  const statuses = group.rows.map(normalizedStatus);
+  if (statuses.includes("error")) return "error";
+  if (statuses.includes("grading")) return "grading";
+  if (statuses.includes("needs_teacher")) return "needs_teacher";
+  if (statuses.every(value => value === "graded")) return "graded";
+  return "submitted";
+}
+
+function statusLabel(value) {
+  return ({
+    submitted: "לא נבדק",
+    grading: "בבדיקה",
+    graded: "נבדק",
+    needs_teacher: "לבדיקת מרצה",
+    error: "שגיאה"
+  })[value] || "לא נבדק";
+}
+
+function hasNoScore(group) {
+  return group.rows.every(row => row.score === null || row.score === undefined);
+}
+
+function renderSummary(groups) {
+  const counts = {submitted:0, grading:0, graded:0, needs_teacher:0, error:0};
+  groups.forEach(group => { counts[groupStatus(group)] += 1; });
+  document.getElementById("summary").innerHTML =
+    `<span class="counter">סה״כ: ${groups.length}</span>` +
+    Object.entries(counts).map(([key, value]) =>
+      `<span class="status-badge status-${key}">${statusLabel(key)}: ${value}</span>`
+    ).join("");
+}
+
 
 function groupFeedbackText(group) {
 
@@ -531,10 +592,17 @@ document.getElementById("load").onclick = async () => {
     const selectedQuiz =
       document.getElementById("quiz_filter").value;
 
+    const selectedStatus =
+      document.getElementById("status_filter").value;
+
     const visibleGroups = groups.filter(group =>
       (selectedCourse === "ALL" || group.course_id === selectedCourse) &&
-      (selectedQuiz === "ALL" || group.quiz_id === selectedQuiz)
+      (selectedQuiz === "ALL" || group.quiz_id === selectedQuiz) &&
+      (selectedStatus === "ALL" ||
+       (selectedStatus === "UNGRADED" ? hasNoScore(group) : groupStatus(group) === selectedStatus))
     );
+
+    renderSummary(visibleGroups);
 
     status.className =
       "success";
@@ -615,6 +683,13 @@ document.getElementById("load").onclick = async () => {
         <p>
           <strong>ציון:</strong>
           ${escapeHtml(groupScoreText(group))}
+        </p>
+
+        <p>
+          <strong>סטטוס:</strong>
+          <span class="status-badge status-${groupStatus(group)}">
+            ${escapeHtml(statusLabel(groupStatus(group)))}
+          </span>
         </p>
 
         <p>
@@ -916,8 +991,12 @@ function showSubmission(
 
     try {
 
-      const r =
-        await fetch(
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 120000);
+
+      let r;
+      try {
+        r = await fetch(
           SUPABASE_URL +
           "/functions/v1/ai-check-submission",
           {
@@ -938,9 +1017,14 @@ function showSubmission(
 
                 quiz_id:
                   group.quiz_key
-              })
+              }),
+
+            signal: controller.signal
           }
         );
+      } finally {
+        clearTimeout(timeoutId);
+      }
 
       const data =
         await r.json();
@@ -1048,8 +1132,10 @@ function showSubmission(
       console.error(e);
 
       status.textContent =
-        "שגיאה בבדיקת AI: " +
-        String(e?.message || e);
+        (e?.name === "AbortError")
+          ? "הבדיקה הופסקה לאחר שתי דקות. אפשר לנסות שוב בבטחה."
+          : "שגיאה בבדיקת AI: " + String(e?.message || e) +
+            ". אפשר לנסות שוב בבטחה.";
 
       status.className = "error";
 
