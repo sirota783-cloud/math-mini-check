@@ -193,7 +193,7 @@ or you are not sufficiently confident.
     )
 
     try:
-       with urllib.request.urlopen(req, timeout=90) as response:
+        with urllib.request.urlopen(req, timeout=90) as response:
             payload = json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as e:
         details = e.read().decode("utf-8", errors="replace")
@@ -361,11 +361,11 @@ def auto_grade_submission(submission_id, quiz_key, uploaded_paths):
     except Exception as e:
         print("AUTO GRADE ERROR:", e)
 
-        feedback = "העבודה התקבלה. הבדיקה האוטומטית לא הסתיימה ולכן נדרשת בדיקת מרצה."
+        feedback = "העבודה התקבלה, אך הבדיקה האוטומטית נכשלה. המרצה יכול להפעיל בדיקה חוזרת."
 
         try:
             sb.table("mini_check_submissions").update({
-                "status": "needs_teacher",
+                "status": "error",
                 "score": None,
                 "feedback": feedback,
             }).eq("id", submission_id).execute()
@@ -373,7 +373,7 @@ def auto_grade_submission(submission_id, quiz_key, uploaded_paths):
             print("AUTO GRADE STATUS UPDATE ERROR:", update_error)
 
         return {
-            "status": "needs_teacher",
+            "status": "error",
             "score": None,
             "feedback": feedback,
         }
