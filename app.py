@@ -53,6 +53,19 @@ def student_access_ok(code, pin):
     return bool(rows)
 
 
+def teacher_password_ok(password):
+    if not password:
+        return False
+    try:
+        sb.rpc(
+            "get_teacher_submissions",
+            {"p_teacher_password": password}
+        ).execute()
+        return True
+    except Exception:
+        return False
+
+
 def clean_part(value, default):
     value = (value or "").strip()
     return value if value else default
@@ -1128,6 +1141,77 @@ def submissions():
         public_rows.append(item)
 
     return jsonify(submissions=public_rows)
+
+
+@app.post("/teacher/students")
+def teacher_students():
+    d = request.get_json(force=True)
+    password = str(d.get("teacher_password", "")).strip()
+    action = str(d.get("action", "list")).strip().lower()
+
+    if not teacher_password_ok(password):
+        return jsonify(error="Invalid teacher password"), 403
+
+    if action == "list":
+        rows = (
+            sb.table("mini_check_student_access")
+            .select("student_code,active,created_at")
+            .order("student_code")
+            .execute()
+            .data
+        )
+
+        grouped = {}
+        for row in rows:
+            code = str(row.get("student_code", "")).strip()
+            if not code:
+                continue
+            item = grouped.setdefault(code, {
+                "student_code": code,
+                "active": False,
+                "registered_pairs": 0,
+            })
+            item["registered_pairs"] += 1
+            item["active"] = item["active"] or bool(row.get("active"))
+
+        return jsonify(students=list(grouped.values()))
+
+    code = str(d.get("student_code", "")).strip()
+    if not code:
+        return jsonify(error="Missing student code"), 400
+
+    if action in {"add", "reset_pin"}:
+        pin = str(d.get("pin", "")).strip()
+        if len(pin) < 4:
+            return jsonify(error="PIN must contain at least 4 characters"), 400
+
+        if action == "reset_pin":
+            sb.table("mini_check_student_access") \
+                .delete() \
+                .eq("student_code", code) \
+                .execute()
+
+        sb.table("mini_check_student_access").upsert({
+            "student_code": code,
+            "pin_hash": phash(code, pin),
+            "active": True,
+        }, on_conflict="student_code,pin_hash").execute()
+
+        return jsonify(ok=True, student_code=code, active=True)
+
+    if action == "set_active":
+        active = bool(d.get("active"))
+        result = (
+            sb.table("mini_check_student_access")
+            .update({"active": active})
+            .eq("student_code", code)
+            .execute()
+        )
+        if not result.data:
+            return jsonify(error="Student code not found"), 404
+        return jsonify(ok=True, student_code=code, active=active)
+
+    return jsonify(error="Unknown action"), 400
 
 
 @app.post("/teacher/file-url")
