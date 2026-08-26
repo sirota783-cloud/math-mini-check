@@ -194,6 +194,24 @@ th,td{
 
 </div>
 
+<div class="card" id="students_card" style="display:none">
+  <h2>ניהול תלמידים</h2>
+
+  <button id="load_students">הצגת תלמידים רשומים</button>
+
+  <label for="new_student_code"><strong>קוד סטודנט:</strong></label>
+  <input id="new_student_code" type="text" placeholder="לדוגמה: MATH-1020">
+
+  <label for="new_student_pin"><strong>PIN חדש:</strong></label>
+  <input id="new_student_pin" type="password" placeholder="לפחות 4 תווים">
+
+  <button id="add_student">הוספת תלמיד</button>
+  <button id="reset_student_pin">החלפת PIN לתלמיד קיים</button>
+
+  <p id="students_status"></p>
+  <div id="students_list"></div>
+</div>
+
 <div class="card" id="protected_card" style="display:none">
 
 <h2>העלאת שאלות הבחינה</h2>
@@ -235,6 +253,9 @@ const SUPABASE_KEY =
 const FILE_URL_ENDPOINT =
   "https://math-mini-check.onrender.com/teacher/file-url";
 
+const STUDENTS_ENDPOINT =
+  "https://math-mini-check.onrender.com/teacher/students";
+
 const TEACHER_SESSION_KEY =
   "math_mini_check_teacher_session";
 
@@ -245,6 +266,7 @@ function showTeacherPanel(password) {
   document.getElementById("teacher_logout").style.display = "block";
   document.getElementById("teacher_controls").style.display = "block";
   document.getElementById("protected_card").style.display = "block";
+  document.getElementById("students_card").style.display = "block";
   document.getElementById("works").style.display = "block";
   document.getElementById("login_status").className = "success";
   document.getElementById("login_status").textContent = "הכניסה הצליחה";
@@ -257,6 +279,7 @@ function hideTeacherPanel() {
   document.getElementById("teacher_logout").style.display = "none";
   document.getElementById("teacher_controls").style.display = "none";
   document.getElementById("protected_card").style.display = "none";
+  document.getElementById("students_card").style.display = "none";
   document.getElementById("works").style.display = "none";
   document.getElementById("works").innerHTML = "";
   document.getElementById("login_status").textContent = "";
@@ -332,6 +355,101 @@ window.addEventListener("load", async () => {
     hideTeacherPanel();
   }
 });
+
+async function studentAdminRequest(payload) {
+  const password = document.getElementById("teacher_password").value.trim();
+  const response = await fetch(STUDENTS_ENDPOINT, {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({teacher_password: password, ...payload})
+  });
+  let data = {};
+  try { data = await response.json(); } catch (_) {}
+  if (!response.ok) throw new Error(data.error || "Request failed");
+  return data;
+}
+
+async function loadStudents() {
+  const status = document.getElementById("students_status");
+  const list = document.getElementById("students_list");
+  status.className = "";
+  status.textContent = "טוען...";
+
+  try {
+    const data = await studentAdminRequest({action: "list"});
+    list.innerHTML = "";
+
+    for (const student of data.students || []) {
+      const row = document.createElement("div");
+      row.className = "box";
+      row.style.marginBottom = "8px";
+      row.innerHTML =
+        `<strong>${escapeHtml(student.student_code)}</strong> — ` +
+        `<span class="${student.active ? "success" : "error"}">` +
+        `${student.active ? "פעיל" : "חסום"}</span>` +
+        (student.registered_pairs > 1
+          ? ` <span class="muted">(${student.registered_pairs} קודי PIN היסטוריים)</span>`
+          : "");
+
+      const toggle = document.createElement("button");
+      toggle.textContent = student.active ? "חסימת גישה" : "הפעלת גישה";
+      toggle.onclick = async () => {
+        toggle.disabled = true;
+        try {
+          await studentAdminRequest({
+            action: "set_active",
+            student_code: student.student_code,
+            active: !student.active
+          });
+          await loadStudents();
+        } catch (error) {
+          alert("שגיאה בעדכון התלמיד");
+          toggle.disabled = false;
+        }
+      };
+      row.appendChild(toggle);
+      list.appendChild(row);
+    }
+
+    status.className = "success";
+    status.textContent = `נמצאו ${(data.students || []).length} תלמידים.`;
+  } catch (error) {
+    console.error(error);
+    status.className = "error";
+    status.textContent = "שגיאה בטעינת התלמידים.";
+  }
+}
+
+document.getElementById("load_students").onclick = loadStudents;
+
+async function saveStudent(action) {
+  const code = document.getElementById("new_student_code").value.trim();
+  const pin = document.getElementById("new_student_pin").value.trim();
+  const status = document.getElementById("students_status");
+
+  if (!code || pin.length < 4) {
+    status.className = "error";
+    status.textContent = "יש להזין קוד סטודנט ו-PIN של לפחות 4 תווים.";
+    return;
+  }
+
+  try {
+    status.className = "";
+    status.textContent = "שומר...";
+    await studentAdminRequest({action, student_code: code, pin});
+    document.getElementById("new_student_pin").value = "";
+    status.className = "success";
+    status.textContent = action === "add" ? "התלמיד נוסף בהצלחה." : "ה-PIN הוחלף בהצלחה.";
+    await loadStudents();
+  } catch (error) {
+    console.error(error);
+    status.className = "error";
+    status.textContent = "שגיאה בשמירת התלמיד.";
+  }
+}
+
+document.getElementById("add_student").onclick = () => saveStudent("add");
+document.getElementById("reset_student_pin").onclick = () => saveStudent("reset_pin");
 
 
 const COURSE_LABELS = {
