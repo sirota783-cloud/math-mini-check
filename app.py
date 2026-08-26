@@ -38,6 +38,21 @@ def teacher_ok():
     )
 
 
+def student_access_ok(code, pin):
+    """Return True only for an active, registered code/PIN pair."""
+    rows = (
+        sb.table("mini_check_student_access")
+        .select("student_code")
+        .eq("student_code", code)
+        .eq("pin_hash", phash(code, pin))
+        .eq("active", True)
+        .limit(1)
+        .execute()
+        .data
+    )
+    return bool(rows)
+
+
 def clean_part(value, default):
     value = (value or "").strip()
     return value if value else default
@@ -619,6 +634,13 @@ def submit():
     if not code or not pin or not quiz_id or not files:
         return jsonify(error="חסרים שדות חובה"), 400
 
+    try:
+        if not student_access_ok(code, pin):
+            return jsonify(error="קוד סטודנט או PIN אינם רשומים"), 403
+    except Exception as e:
+        print("STUDENT ACCESS ERROR:", e)
+        return jsonify(error="שגיאה באימות פרטי הסטודנט"), 500
+
     allowed = {".png", ".jpg", ".jpeg"}
 
     for f in files:
@@ -627,6 +649,23 @@ def submit():
             return jsonify(error="ניתן להעלות רק קבצי PNG או JPG"), 400
 
     quiz_key = make_quiz_key(course_id, group_id, quiz_id)
+
+    try:
+        existing = (
+            sb.table("mini_check_submissions")
+            .select("id")
+            .eq("student_code", code)
+            .eq("pin_hash", phash(code, pin))
+            .eq("quiz_id", quiz_key)
+            .limit(1)
+            .execute()
+            .data
+        )
+        if existing:
+            return jsonify(error="העבודה הזאת כבר הוגשה"), 409
+    except Exception as e:
+        print("DUPLICATE CHECK ERROR:", e)
+        return jsonify(error="שגיאה בבדיקת הגשה קיימת"), 500
 
     sid = str(uuid.uuid4())
     uploaded_paths = []
@@ -668,7 +707,7 @@ def submit():
             quiz_id=quiz_id,
             status="submitted",
             score=None,
-            feedback="העבודה התקבלה. ניתן להתחיל בדיקת AI."
+            feedback="העבודה התקבלה. הבדיקה האוטומטית מתחילה."
         )
 
     except Exception as e:
@@ -703,6 +742,13 @@ def student_existing_submission():
 
     if not code or not pin:
         return jsonify(error="חסרים קוד סטודנט או PIN"), 400
+
+    try:
+        if not student_access_ok(code, pin):
+            return jsonify(error="קוד סטודנט או PIN אינם רשומים"), 403
+    except Exception as e:
+        print("STUDENT ACCESS ERROR:", e)
+        return jsonify(error="שגיאה באימות פרטי הסטודנט"), 500
 
     quiz_key = make_quiz_key(course_id, group_id, quiz_id)
 
@@ -761,6 +807,13 @@ def student_grade():
 
     if not submission_id or not code or not pin:
         return jsonify(error="חסרים פרטים לבדיקה"), 400
+
+    try:
+        if not student_access_ok(code, pin):
+            return jsonify(error="קוד סטודנט או PIN אינם רשומים"), 403
+    except Exception as e:
+        print("STUDENT ACCESS ERROR:", e)
+        return jsonify(error="שגיאה באימות פרטי הסטודנט"), 500
 
     rows = (
         sb.table("mini_check_submissions")
@@ -960,7 +1013,16 @@ def results():
     d = request.get_json(force=True)
 
     code = d.get("student_code", "").strip()
-    p = phash(code, d.get("pin", ""))
+    pin = d.get("pin", "")
+
+    try:
+        if not student_access_ok(code, pin):
+            return jsonify(error="קוד סטודנט או PIN אינם רשומים"), 403
+    except Exception as e:
+        print("STUDENT ACCESS ERROR:", e)
+        return jsonify(error="שגיאה באימות פרטי הסטודנט"), 500
+
+    p = phash(code, pin)
 
     rows = (
         sb.table("mini_check_submissions")
