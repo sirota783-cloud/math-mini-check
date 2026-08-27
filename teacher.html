@@ -186,6 +186,9 @@ th,td{
   <option value="error">שגיאה</option>
 </select>
 
+<button id="export_excel">הורדת ציונים ל-Excel</button>
+<p id="export_status"></p>
+
 <div id="summary" class="summary"></div>
 
 <p id="status"></p>
@@ -255,6 +258,9 @@ const FILE_URL_ENDPOINT =
 
 const STUDENTS_ENDPOINT =
   "https://math-mini-check.onrender.com/teacher/students";
+
+const EXCEL_EXPORT_ENDPOINT =
+  "https://math-mini-check.onrender.com/teacher/export.xlsx";
 
 const TEACHER_SESSION_KEY =
   "math_mini_check_teacher_session";
@@ -716,6 +722,71 @@ async function getSignedUrlsForGroup(
     ...new Set(allUrls)
   ];
 }
+
+document.getElementById("export_excel").onclick = async () => {
+  const password =
+    document.getElementById("teacher_password").value.trim();
+  const exportStatus = document.getElementById("export_status");
+  const button = document.getElementById("export_excel");
+  const courseId = document.getElementById("course_filter").value;
+  const quizId = document.getElementById("quiz_filter").value;
+  const selectedStatus = document.getElementById("status_filter").value;
+
+  if (!password) {
+    exportStatus.className = "error";
+    exportStatus.textContent = "יש להיכנס כמרצה.";
+    return;
+  }
+
+  button.disabled = true;
+  exportStatus.className = "";
+  exportStatus.textContent = "מכין קובץ Excel...";
+
+  try {
+    const response = await fetch(EXCEL_EXPORT_ENDPOINT, {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({
+        teacher_password: password,
+        course_id: courseId,
+        quiz_id: quizId,
+        status: selectedStatus
+      })
+    });
+
+    if (!response.ok) {
+      let message = "Excel export failed";
+      try {
+        const data = await response.json();
+        message = data.error || message;
+      } catch (_) {}
+      throw new Error(message);
+    }
+
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    const date = new Date().toISOString().slice(0, 10);
+    const coursePart = courseId === "ALL" ? "all" : courseId;
+    const quizPart = quizId === "ALL" ? "all" : quizId;
+
+    link.href = url;
+    link.download = `grades_${coursePart}_${quizPart}_${date}.xlsx`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+
+    exportStatus.className = "success";
+    exportStatus.textContent = "קובץ Excel הורד בהצלחה.";
+  } catch (error) {
+    console.error(error);
+    exportStatus.className = "error";
+    exportStatus.textContent = "שגיאה בהורדת קובץ Excel.";
+  } finally {
+    button.disabled = false;
+  }
+};
 
 
 document.getElementById("load").onclick = async () => {

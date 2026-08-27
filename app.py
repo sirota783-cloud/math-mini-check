@@ -4,10 +4,14 @@ import uuid
 import json
 import base64
 import re
+import io
+import zipfile
 import urllib.request
 import urllib.error
+from datetime import datetime, timezone
+from xml.sax.saxutils import escape
 
-from flask import Flask, request, jsonify, render_template_string
+from flask import Flask, request, jsonify, render_template_string, send_file
 from flask_cors import CORS
 from supabase import create_client
 
@@ -142,6 +146,291 @@ def split_quiz_key(value):
         "group_id": "",
         "quiz_id": value,
     }
+
+
+def normalized_submission_status(row):
+    value = str(row.get("status", "")).strip().lower()
+    if value == "graded" and row.get("score") is not None:
+        return "graded"
+    if value in {"submitted", "grading", "needs_teacher", "error"}:
+        return value
+    return "graded" if row.get("score") is not None else "submitted"
+
+
+def grouped_submission_rows(rows):
+    """Match the grouping shown on the teacher page."""
+    groups = {}
+
+    for row in rows:
+        parts = split_quiz_key(row.get("quiz_id"))
+        course_id = parts.get("course_id") or "legacy"
+        group_id = parts.get("group_id") or "general"
+        quiz_id = parts.get("quiz_id") or ""
+        student_code = normalize_student_code(row.get("student_code"))
+        key = (course_id, group_id, quiz_id, student_code)
+
+        group = groups.setdefault(key, {
+            "student_code": student_code,
+            "course_id": course_id,
+            "group_id": group_id,
+            "quiz_id": quiz_id,
+            "rows": [],
+        })
+        group["rows"].append(row)
+
+    output = []
+
+    for group in groups.values():
+        statuses = [
+            normalized_submission_status(row)
+            for row in group["rows"]
+        ]
+
+        if "error" in statuses:
+            status = "error"
+        elif "grading" in statuses:
+            status = "grading"
+        elif "needs_teacher" in statuses:
+            status = "needs_teacher"
+        elif statuses and all(value == "graded" for value in statuses):
+            status = "graded"
+        else:
+            status = "submitted"
+
+        numeric_scores = []
+        for row in group["rows"]:
+            value = row.get("score")
+            if value is None:
+                continue
+            try:
+                numeric_scores.append(float(value))
+            except (TypeError, ValueError):
+                continue
+
+        unique_scores = sorted(set(numeric_scores))
+        score = unique_scores[0] if len(unique_scores) == 1 else None
+        if isinstance(score, float) and score.is_integer():
+            score = int(score)
+
+        feedback_values = []
+        for row in group["rows"]:
+            value = str(row.get("feedback", "") or "").strip()
+            if value and value not in feedback_values:
+                feedback_values.append(value)
+
+        if len(feedback_values) == 1:
+            feedback = feedback_values[0]
+        elif len(feedback_values) > 1:
+            feedback = "קיימות הערות שונות בין חלקי ההגשה"
+        else:
+            feedback = ""
+
+        dates = [
+            str(row.get("created_at", "") or "").strip()
+            for row in group["rows"]
+            if row.get("created_at")
+        ]
+
+        output.append({
+            **{k: v for k, v in group.items() if k != "rows"},
+            "status": status,
+            "score": score,
+            "feedback": feedback,
+            "created_at": max(dates) if dates else "",
+            "has_no_score": len(numeric_scores) == 0,
+        })
+
+    return output
+
+
+def excel_column_name(number):
+    result = ""
+    while number:
+        number, remainder = divmod(number - 1, 26)
+        result = chr(65 + remainder) + result
+    return result
+
+
+def excel_datetime_serial(value):
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        if parsed.tzinfo is not None:
+            parsed = parsed.astimezone(timezone.utc).replace(tzinfo=None)
+        origin = datetime(1899, 12, 30)
+        return (parsed - origin).total_seconds() / 86400
+    except (TypeError, ValueError):
+        return None
+
+
+def build_grades_xlsx(records):
+    """Build a compact, right-to-left Excel workbook without extra packages."""
+    headers = [
+        "קוד סטודנט",
+        "מקצוע",
+        "קבוצה",
+        "מספר תרגול",
+        "ציון",
+        "מצב",
+        "תאריך הגשה",
+        "הערה",
+    ]
+
+    status_labels = {
+        "submitted": "לא נבדק",
+        "grading": "בבדיקה",
+        "graded": "נבדק",
+        "needs_teacher": "לבדיקת מרצה",
+        "error": "שגיאה",
+    }
+    course_labels = {
+        "MATH": "מתמטיקה — קורס הכנה",
+        "DISCRETE": "מתמטיקה בדידה",
+        "legacy": "הגשות ישנות",
+        "general": "כללי",
+    }
+
+    table_rows = []
+    for record in records:
+        table_rows.append([
+            record.get("student_code", ""),
+            course_labels.get(
+                record.get("course_id"),
+                record.get("course_id", "")
+            ),
+            record.get("group_id", ""),
+            record.get("quiz_id", ""),
+            record.get("score"),
+            status_labels.get(
+                record.get("status"),
+                record.get("status", "")
+            ),
+            record.get("created_at", ""),
+            record.get("feedback", ""),
+        ])
+
+    def inline_cell(reference, value, style=2):
+        text = escape(str(value if value is not None else ""))
+        return (
+            f'<c r="{reference}" t="inlineStr" s="{style}">'
+            f'<is><t xml:space="preserve">{text}</t></is></c>'
+        )
+
+    def number_cell(reference, value, style=4):
+        return f'<c r="{reference}" t="n" s="{style}"><v>{value}</v></c>'
+
+    xml_rows = []
+    header_cells = [
+        inline_cell(f"{excel_column_name(index)}1", value, 1)
+        for index, value in enumerate(headers, start=1)
+    ]
+    xml_rows.append(
+        '<row r="1" ht="24" customHeight="1">'
+        + "".join(header_cells)
+        + "</row>"
+    )
+
+    for row_number, values in enumerate(table_rows, start=2):
+        cells = []
+        for column_number, value in enumerate(values, start=1):
+            reference = f"{excel_column_name(column_number)}{row_number}"
+            if column_number == 5 and value is not None:
+                cells.append(number_cell(reference, value, 4))
+            elif column_number == 7:
+                serial = excel_datetime_serial(value)
+                if serial is None:
+                    cells.append(inline_cell(reference, value, 2))
+                else:
+                    cells.append(number_cell(reference, serial, 3))
+            else:
+                cells.append(inline_cell(reference, value, 2))
+        xml_rows.append(f'<row r="{row_number}">' + "".join(cells) + "</row>")
+
+    last_row = max(1, len(table_rows) + 1)
+    created = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+
+    sheet_xml = f'''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <dimension ref="A1:H{last_row}"/>
+  <sheetViews><sheetView workbookViewId="0" rightToLeft="1"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews>
+  <sheetFormatPr defaultRowHeight="18"/>
+  <cols>
+    <col min="1" max="1" width="18" customWidth="1"/>
+    <col min="2" max="2" width="28" customWidth="1"/>
+    <col min="3" max="3" width="14" customWidth="1"/>
+    <col min="4" max="4" width="14" customWidth="1"/>
+    <col min="5" max="5" width="11" customWidth="1"/>
+    <col min="6" max="6" width="18" customWidth="1"/>
+    <col min="7" max="7" width="21" customWidth="1"/>
+    <col min="8" max="8" width="55" customWidth="1"/>
+  </cols>
+  <sheetData>{''.join(xml_rows)}</sheetData>
+  <autoFilter ref="A1:H{last_row}"/>
+</worksheet>'''
+
+    styles_xml = '''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <numFmts count="1"><numFmt numFmtId="164" formatCode="yyyy-mm-dd hh:mm"/></numFmts>
+  <fonts count="2">
+    <font><sz val="11"/><name val="Arial"/></font>
+    <font><b/><color rgb="FFFFFFFF"/><sz val="11"/><name val="Arial"/></font>
+  </fonts>
+  <fills count="3">
+    <fill><patternFill patternType="none"/></fill>
+    <fill><patternFill patternType="gray125"/></fill>
+    <fill><patternFill patternType="solid"><fgColor rgb="FF4472C4"/><bgColor indexed="64"/></patternFill></fill>
+  </fills>
+  <borders count="2">
+    <border><left/><right/><top/><bottom/><diagonal/></border>
+    <border><left style="thin"><color rgb="FFD9E2F3"/></left><right style="thin"><color rgb="FFD9E2F3"/></right><top style="thin"><color rgb="FFD9E2F3"/></top><bottom style="thin"><color rgb="FFD9E2F3"/></bottom><diagonal/></border>
+  </borders>
+  <cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
+  <cellXfs count="5">
+    <xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>
+    <xf numFmtId="0" fontId="1" fillId="2" borderId="1" xfId="0" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>
+    <xf numFmtId="0" fontId="0" fillId="0" borderId="1" xfId="0" applyAlignment="1"><alignment horizontal="right" vertical="center" wrapText="1"/></xf>
+    <xf numFmtId="164" fontId="0" fillId="0" borderId="1" xfId="0" applyNumberFormat="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>
+    <xf numFmtId="0" fontId="0" fillId="0" borderId="1" xfId="0" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>
+  </cellXfs>
+  <cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>
+</styleSheet>'''
+
+    files = {
+        "[Content_Types].xml": '''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
+  <Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
+  <Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>
+  <Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/>
+  <Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/>
+</Types>''',
+        "_rels/.rels": '''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
+  <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/>
+  <Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/extended-properties" Target="docProps/app.xml"/>
+</Relationships>''',
+        "docProps/app.xml": '''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties" xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes"><Application>Math Mini Check</Application></Properties>''',
+        "docProps/core.xml": f'''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"><dc:creator>Leonid Sirota</dc:creator><dc:title>Math Mini Check Grades</dc:title><dcterms:created xsi:type="dcterms:W3CDTF">{created}</dcterms:created></cp:coreProperties>''',
+        "xl/workbook.xml": '''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><bookViews><workbookView/></bookViews><sheets><sheet name="ציונים" sheetId="1" r:id="rId1"/></sheets></workbook>''',
+        "xl/_rels/workbook.xml.rels": '''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>''',
+        "xl/styles.xml": styles_xml,
+        "xl/worksheets/sheet1.xml": sheet_xml,
+    }
+
+    output = io.BytesIO()
+    with zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as archive:
+        for path, content in files.items():
+            archive.writestr(path, content.encode("utf-8"))
+    output.seek(0)
+    return output
 
 
 def safe_json_from_text(text):
@@ -1234,6 +1523,98 @@ def results():
         })
 
     return jsonify(results=public_rows)
+
+
+# ==========================================================
+# TEACHER – EXPORT GRADES TO EXCEL
+# ==========================================================
+
+@app.post("/teacher/export.xlsx")
+def teacher_export_xlsx():
+    d = request.get_json(force=True)
+    password = str(d.get("teacher_password", "")).strip()
+
+    if not teacher_password_ok(password):
+        return jsonify(error="Invalid teacher password"), 403
+
+    selected_course = str(d.get("course_id", "ALL")).strip() or "ALL"
+    selected_quiz = str(d.get("quiz_id", "ALL")).strip() or "ALL"
+    selected_status = str(d.get("status", "ALL")).strip() or "ALL"
+
+    try:
+        rows = (
+            sb.table("mini_check_submissions")
+            .select(
+                "student_code,"
+                "quiz_id,"
+                "score,"
+                "feedback,"
+                "status,"
+                "created_at"
+            )
+            .order("created_at", desc=True)
+            .execute()
+            .data
+        )
+
+        records = grouped_submission_rows(rows)
+        filtered = []
+
+        for record in records:
+            if (
+                selected_course != "ALL"
+                and record.get("course_id") != selected_course
+            ):
+                continue
+            if (
+                selected_quiz != "ALL"
+                and str(record.get("quiz_id", "")) != selected_quiz
+            ):
+                continue
+            if selected_status == "UNGRADED":
+                if not record.get("has_no_score"):
+                    continue
+            elif (
+                selected_status != "ALL"
+                and record.get("status") != selected_status
+            ):
+                continue
+            filtered.append(record)
+
+        filtered.sort(key=lambda item: (
+            str(item.get("student_code", "")),
+            str(item.get("quiz_id", "")),
+        ))
+
+        workbook = build_grades_xlsx(filtered)
+
+        filename_parts = ["grades"]
+        if selected_course != "ALL":
+            filename_parts.append(selected_course)
+        if selected_quiz != "ALL":
+            filename_parts.append(selected_quiz)
+        filename_parts.append(datetime.now(timezone.utc).date().isoformat())
+        filename = "_".join(
+            re.sub(r"[^A-Za-z0-9_-]+", "-", part).strip("-") or "all"
+            for part in filename_parts
+        ) + ".xlsx"
+
+        response = send_file(
+            workbook,
+            mimetype=(
+                "application/vnd.openxmlformats-officedocument."
+                "spreadsheetml.sheet"
+            ),
+            as_attachment=True,
+            download_name=filename,
+            max_age=0,
+        )
+        response.headers["X-Exported-Rows"] = str(len(filtered))
+        return response
+
+    except Exception as e:
+        print("TEACHER EXCEL EXPORT ERROR:", e, flush=True)
+        return jsonify(error="Excel export failed"), 500
 
 
 # ==========================================================
