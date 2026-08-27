@@ -274,7 +274,6 @@ def build_grades_xlsx(records):
         "ציון",
         "מצב",
         "תאריך הגשה",
-        "הערה",
     ]
 
     status_labels = {
@@ -307,7 +306,6 @@ def build_grades_xlsx(records):
                 record.get("status", "")
             ),
             record.get("created_at", ""),
-            record.get("feedback", ""),
         ])
 
     def inline_cell(reference, value, style=2):
@@ -352,7 +350,7 @@ def build_grades_xlsx(records):
 
     sheet_xml = f'''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
-  <dimension ref="A1:H{last_row}"/>
+  <dimension ref="A1:G{last_row}"/>
   <sheetViews><sheetView workbookViewId="0" rightToLeft="1"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews>
   <sheetFormatPr defaultRowHeight="18"/>
   <cols>
@@ -363,10 +361,9 @@ def build_grades_xlsx(records):
     <col min="5" max="5" width="11" customWidth="1"/>
     <col min="6" max="6" width="18" customWidth="1"/>
     <col min="7" max="7" width="21" customWidth="1"/>
-    <col min="8" max="8" width="55" customWidth="1"/>
   </cols>
   <sheetData>{''.join(xml_rows)}</sheetData>
-  <autoFilter ref="A1:H{last_row}"/>
+  <autoFilter ref="A1:G{last_row}"/>
 </worksheet>'''
 
     styles_xml = '''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
