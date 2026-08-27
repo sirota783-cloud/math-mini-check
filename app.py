@@ -3,6 +3,7 @@ import hashlib
 import uuid
 import json
 import base64
+import re
 import urllib.request
 import urllib.error
 
@@ -34,6 +35,17 @@ def phash(code, pin):
     ).hexdigest()
 
 
+def normalize_student_code(value):
+    """
+    Make harmless spelling differences equivalent:
+    "Math 1004", "math-1004" and "MATH-1004" -> "MATH-1004".
+    """
+    value = str(value or "").strip().upper()
+    value = re.sub(r"[\s_]+", "-", value)
+    value = re.sub(r"-+", "-", value)
+    return value.strip("-")
+
+
 def teacher_ok():
     return (
         request.headers.get("X-Teacher-Key", "")
@@ -41,19 +53,46 @@ def teacher_ok():
     )
 
 
-def student_access_ok(code, pin):
-    """Return True only for an active, registered code/PIN pair."""
+def student_access_identity(code, pin):
+    """
+    Resolve an active code/PIN without breaking historical mixed-case codes.
+
+    PIN hashes in existing rows were calculated from the spelling originally
+    used when the student was registered. Therefore each candidate must be
+    checked with its stored code, while new submissions use a canonical code.
+    """
+    canonical_code = normalize_student_code(code)
+    if not canonical_code or not pin:
+        return None
+
     rows = (
         sb.table("mini_check_student_access")
-        .select("student_code")
-        .eq("student_code", code)
-        .eq("pin_hash", phash(code, pin))
+        .select("student_code,pin_hash")
         .eq("active", True)
-        .limit(1)
         .execute()
         .data
     )
-    return bool(rows)
+
+    for row in rows:
+        stored_code = str(row.get("student_code", "")).strip()
+        stored_hash = str(row.get("pin_hash", ""))
+
+        if (
+            normalize_student_code(stored_code) == canonical_code
+            and stored_hash == phash(stored_code, pin)
+        ):
+            return {
+                "student_code": canonical_code,
+                "pin_hash": stored_hash,
+                "registered_code": stored_code,
+            }
+
+    return None
+
+
+def student_access_ok(code, pin):
+    """Compatibility wrapper for simple access checks."""
+    return student_access_identity(code, pin) is not None
 
 
 def teacher_password_ok(password):
@@ -757,11 +796,15 @@ def submit():
         return jsonify(error="חסרים שדות חובה"), 400
 
     try:
-        if not student_access_ok(code, pin):
+        identity = student_access_identity(code, pin)
+        if not identity:
             return jsonify(error="קוד סטודנט או PIN אינם רשומים"), 403
     except Exception as e:
         print("STUDENT ACCESS ERROR:", e)
         return jsonify(error="שגיאה באימות פרטי הסטודנט"), 500
+
+    canonical_code = identity["student_code"]
+    access_pin_hash = identity["pin_hash"]
 
     allowed = {".png", ".jpg", ".jpeg"}
 
@@ -776,8 +819,7 @@ def submit():
         existing = (
             sb.table("mini_check_submissions")
             .select("id")
-            .eq("student_code", code)
-            .eq("pin_hash", phash(code, pin))
+            .eq("pin_hash", access_pin_hash)
             .eq("quiz_id", quiz_key)
             .limit(1)
             .execute()
@@ -797,7 +839,7 @@ def submit():
             ext = os.path.splitext(f.filename)[1].lower()
 
             # Keep storage path simple and independent of Hebrew/course names.
-            path = f"{code}/{sid}/{index:03d}{ext}"
+            path = f"{canonical_code}/{sid}/{index:03d}{ext}"
             content = f.read()
 
             sb.storage.from_("mini-check-files").upload(
@@ -813,8 +855,8 @@ def submit():
 
         sb.table("mini_check_submissions").insert({
             "id": sid,
-            "student_code": code,
-            "pin_hash": phash(code, pin),
+            "student_code": canonical_code,
+            "pin_hash": access_pin_hash,
             "quiz_id": quiz_key,
             "file_path": json.dumps(uploaded_paths, ensure_ascii=False),
             "status": "submitted"
@@ -866,11 +908,14 @@ def student_existing_submission():
         return jsonify(error="חסרים קוד סטודנט או PIN"), 400
 
     try:
-        if not student_access_ok(code, pin):
+        identity = student_access_identity(code, pin)
+        if not identity:
             return jsonify(error="קוד סטודנט או PIN אינם רשומים"), 403
     except Exception as e:
         print("STUDENT ACCESS ERROR:", e)
         return jsonify(error="שגיאה באימות פרטי הסטודנט"), 500
+
+    access_pin_hash = identity["pin_hash"]
 
     quiz_key = make_quiz_key(course_id, group_id, quiz_id)
 
@@ -886,8 +931,7 @@ def student_existing_submission():
                 "feedback,"
                 "created_at"
             )
-            .eq("student_code", code)
-            .eq("pin_hash", phash(code, pin))
+            .eq("pin_hash", access_pin_hash)
             .eq("quiz_id", quiz_key)
             .order("created_at", desc=True)
             .limit(1)
@@ -931,7 +975,8 @@ def student_grade():
         return jsonify(error="חסרים פרטים לבדיקה"), 400
 
     try:
-        if not student_access_ok(code, pin):
+        identity = student_access_identity(code, pin)
+        if not identity:
             return jsonify(error="קוד סטודנט או PIN אינם רשומים"), 403
     except Exception as e:
         print("STUDENT ACCESS ERROR:", e)
@@ -960,7 +1005,11 @@ def student_grade():
 
     row = rows[0]
 
-    if row.get("student_code") != code or row.get("pin_hash") != phash(code, pin):
+    if (
+        normalize_student_code(row.get("student_code"))
+        != identity["student_code"]
+        or row.get("pin_hash") != identity["pin_hash"]
+    ):
         return jsonify(error="קוד סטודנט או PIN שגויים"), 403
 
     current_status = row.get("status") or "submitted"
@@ -1060,6 +1109,14 @@ def student_delete_submission():
     if not submission_id or not code or not pin:
         return jsonify(error="חסרים פרטים למחיקת ההגשה"), 400
 
+    try:
+        identity = student_access_identity(code, pin)
+        if not identity:
+            return jsonify(error="קוד סטודנט או PIN אינם רשומים"), 403
+    except Exception as e:
+        print("STUDENT ACCESS ERROR:", e)
+        return jsonify(error="שגיאה באימות פרטי הסטודנט"), 500
+
     rows = (
         sb.table("mini_check_submissions")
         .select(
@@ -1081,8 +1138,9 @@ def student_delete_submission():
     row = rows[0]
 
     if (
-        row.get("student_code") != code
-        or row.get("pin_hash") != phash(code, pin)
+        normalize_student_code(row.get("student_code"))
+        != identity["student_code"]
+        or row.get("pin_hash") != identity["pin_hash"]
     ):
         return jsonify(error="קוד סטודנט או PIN שגויים"), 403
 
@@ -1138,13 +1196,12 @@ def results():
     pin = d.get("pin", "")
 
     try:
-        if not student_access_ok(code, pin):
+        identity = student_access_identity(code, pin)
+        if not identity:
             return jsonify(error="קוד סטודנט או PIN אינם רשומים"), 403
     except Exception as e:
         print("STUDENT ACCESS ERROR:", e)
         return jsonify(error="שגיאה באימות פרטי הסטודנט"), 500
-
-    p = phash(code, pin)
 
     rows = (
         sb.table("mini_check_submissions")
@@ -1155,8 +1212,7 @@ def results():
             "status,"
             "created_at"
         )
-        .eq("student_code", code)
-        .eq("pin_hash", p)
+        .eq("pin_hash", identity["pin_hash"])
         .order("created_at", desc=True)
         .execute()
         .data
@@ -1272,7 +1328,7 @@ def teacher_students():
 
         grouped = {}
         for row in rows:
-            code = str(row.get("student_code", "")).strip()
+            code = normalize_student_code(row.get("student_code"))
             if not code:
                 continue
             item = grouped.setdefault(code, {
@@ -1285,7 +1341,8 @@ def teacher_students():
 
         return jsonify(students=list(grouped.values()))
 
-    code = str(d.get("student_code", "")).strip()
+    raw_code = str(d.get("student_code", "")).strip()
+    code = normalize_student_code(raw_code)
     if not code:
         return jsonify(error="Missing student code"), 400
 
@@ -1294,11 +1351,77 @@ def teacher_students():
         if len(pin) < 4:
             return jsonify(error="PIN must contain at least 4 characters"), 400
 
+        rows = (
+            sb.table("mini_check_student_access")
+            .select("student_code,pin_hash,active")
+            .execute()
+            .data
+        )
+        matching_rows = [
+            row for row in rows
+            if normalize_student_code(row.get("student_code")) == code
+        ]
+
+        if action == "add" and matching_rows:
+            same_pair_rows = [
+                row for row in matching_rows
+                if str(row.get("pin_hash", ""))
+                == phash(str(row.get("student_code", "")).strip(), pin)
+            ]
+            if same_pair_rows:
+                for row in same_pair_rows:
+                    sb.table("mini_check_student_access") \
+                        .update({"active": True}) \
+                        .eq(
+                            "student_code",
+                            str(row.get("student_code", "")).strip()
+                        ) \
+                        .eq("pin_hash", row.get("pin_hash")) \
+                        .execute()
+                return jsonify(ok=True, student_code=code, active=True)
+            return jsonify(
+                error="Student code already exists; use reset PIN"
+            ), 409
+
         if action == "reset_pin":
-            sb.table("mini_check_student_access") \
-                .delete() \
-                .eq("student_code", code) \
-                .execute()
+            active_hashes = {
+                str(row.get("pin_hash", ""))
+                for row in matching_rows
+                if bool(row.get("active")) and row.get("pin_hash")
+            }
+            if len(active_hashes) > 1:
+                return jsonify(
+                    error=(
+                        "This code has multiple active PINs. "
+                        "Assign a new unique student code first."
+                    )
+                ), 409
+
+            matching_codes = {
+                str(row.get("student_code", "")).strip()
+                for row in matching_rows
+            }
+
+            new_hash = phash(code, pin)
+            old_hashes = {
+                str(row.get("pin_hash", ""))
+                for row in matching_rows
+                if row.get("pin_hash")
+            }
+            for old_hash in old_hashes:
+                sb.table("mini_check_submissions") \
+                    .update({
+                        "student_code": code,
+                        "pin_hash": new_hash,
+                    }) \
+                    .eq("pin_hash", old_hash) \
+                    .execute()
+
+            for stored_code in matching_codes:
+                sb.table("mini_check_student_access") \
+                    .delete() \
+                    .eq("student_code", stored_code) \
+                    .execute()
 
         sb.table("mini_check_student_access").upsert({
             "student_code": code,
@@ -1310,14 +1433,26 @@ def teacher_students():
 
     if action == "set_active":
         active = bool(d.get("active"))
-        result = (
+        rows = (
             sb.table("mini_check_student_access")
-            .update({"active": active})
-            .eq("student_code", code)
+            .select("student_code")
             .execute()
+            .data
         )
-        if not result.data:
+        matching_codes = {
+            str(row.get("student_code", "")).strip()
+            for row in rows
+            if normalize_student_code(row.get("student_code")) == code
+        }
+        if not matching_codes:
             return jsonify(error="Student code not found"), 404
+
+        for stored_code in matching_codes:
+            sb.table("mini_check_student_access") \
+                .update({"active": active}) \
+                .eq("student_code", stored_code) \
+                .execute()
+
         return jsonify(ok=True, student_code=code, active=active)
 
     return jsonify(error="Unknown action"), 400
