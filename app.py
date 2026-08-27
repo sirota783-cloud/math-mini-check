@@ -14,9 +14,12 @@ from supabase import create_client
 app = Flask(__name__)
 CORS(app)
 
+SUPABASE_URL = os.environ["SUPABASE_URL"].rstrip("/")
+SUPABASE_SERVICE_KEY = os.environ["SUPABASE_SERVICE_KEY"]
+
 sb = create_client(
-    os.environ["SUPABASE_URL"],
-    os.environ["SUPABASE_SERVICE_KEY"]
+    SUPABASE_URL,
+    SUPABASE_SERVICE_KEY
 )
 
 TEACHER_KEY = os.environ["TEACHER_KEY"]
@@ -248,6 +251,92 @@ or you are not sufficiently confident.
         "confidence": confidence,
         "needs_teacher": needs_teacher,
     }
+
+
+def signed_image_urls(uploaded_paths, expires_in=900):
+    """Create short-lived URLs for the existing Supabase AI function."""
+    urls = []
+
+    for path in uploaded_paths:
+        result = (
+            sb.storage
+            .from_("mini-check-files")
+            .create_signed_url(path, expires_in)
+        )
+
+        signed_url = (
+            result.get("signedURL")
+            or result.get("signedUrl")
+            or result.get("signed_url")
+        )
+
+        if not signed_url:
+            raise RuntimeError(
+                f"Could not create signed URL for {path}"
+            )
+
+        urls.append(signed_url)
+
+    return urls
+
+
+def edge_function_grade(quiz_key, image_urls):
+    """
+    Use the same Supabase AI checker that already works on the teacher page.
+    This avoids requiring a second OpenAI key/configuration on Render.
+    """
+    body = json.dumps({
+        "image_urls": image_urls,
+        "quiz_id": quiz_key,
+    }).encode("utf-8")
+
+    req = urllib.request.Request(
+        SUPABASE_URL + "/functions/v1/ai-check-submission",
+        data=body,
+        method="POST",
+        headers={
+            "apikey": SUPABASE_SERVICE_KEY,
+            "Content-Type": "application/json",
+        },
+    )
+
+    try:
+        with urllib.request.urlopen(req, timeout=120) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        details = e.read().decode("utf-8", errors="replace")
+        raise RuntimeError(
+            f"Supabase AI HTTP {e.code}: {details[:500]}"
+        )
+    except Exception as e:
+        raise RuntimeError(f"Supabase AI request failed: {e}")
+
+    score = payload.get("score")
+    if score is not None:
+        score = float(score)
+        if score.is_integer():
+            score = int(score)
+
+    confidence_value = payload.get("confidence")
+    confidence = (
+        float(confidence_value)
+        if confidence_value is not None
+        else 1.0
+    )
+
+    status = str(payload.get("status", "")).strip().lower()
+    needs_teacher = bool(payload.get("needs_teacher", False))
+    if status in {"needs_teacher", "teacher_review"}:
+        needs_teacher = True
+
+    return {
+        "score": score,
+        "feedback": str(payload.get("feedback", "")).strip(),
+        "confidence": confidence,
+        "needs_teacher": needs_teacher,
+    }
+
+
 def load_exam_file(quiz_key):
     """
     Loads the official exam file from Supabase Storage.
@@ -290,71 +379,91 @@ def auto_grade_submission(submission_id, quiz_key, uploaded_paths):
     Any failure sends the work to teacher review instead of losing it.
     """
     try:
-        rubric_rows = (
-            sb.table("mini_check_rubrics")
-            .select("problem,rubric")
-            .eq("quiz_id", quiz_key)
-            .limit(1)
-            .execute()
-            .data
-        )
+        grade = None
 
-        # The official exam PDF/image is enough to enable automatic grading.
-        # A teacher rubric, when present, overrides the default instructions.
-        exam_file = load_exam_file(quiz_key)
+        # Primary path: reuse the Supabase Edge Function already used by the
+        # teacher page. It has the working OpenAI configuration and exam-file
+        # lookup, so student auto-grading behaves exactly like manual grading.
+        try:
+            image_urls = signed_image_urls(uploaded_paths)
+            grade = edge_function_grade(quiz_key, image_urls)
+        except Exception as edge_error:
+            print("SUPABASE EDGE GRADE ERROR:", edge_error, flush=True)
 
-        if rubric_rows:
-            rubric_row = rubric_rows[0]
-            problem = rubric_row.get("problem", "") or "Use the attached official exam/questions file."
-            rubric_text = rubric_row.get("rubric", "").strip()
-        else:
-            problem = "Use the attached official exam/questions file."
-            rubric_text = ""
+        # Optional fallback for installations that also configured an OpenAI
+        # key on Render. The current deployment can work without this key.
+        if grade is None:
+            if not OPENAI_API_KEY:
+                raise RuntimeError(
+                    "Supabase AI failed and OPENAI_API_KEY is not configured"
+                )
 
-        if not rubric_text:
-            rubric_text = (
-                "Grade the entire submitted exam out of 100. "
-                "Use the official exam/questions file as the source of the questions. "
-                "Give 0 points for questions or subquestions that were not answered. "
-                "Deduct points proportionally for mathematical errors and incomplete reasoning. "
-                "Accept any mathematically valid solution method. "
-                "Do not rescale a partially submitted exam to 100."
+            rubric_rows = (
+                sb.table("mini_check_rubrics")
+                .select("problem,rubric")
+                .eq("quiz_id", quiz_key)
+                .limit(1)
+                .execute()
+                .data
             )
 
-        if exam_file is None and not rubric_rows:
-            feedback = "העבודה התקבלה. קובץ שאלות הבחינה לא נמצא ולכן נדרשת בדיקת מרצה."
-            sb.table("mini_check_submissions").update({
-                "status": "needs_teacher",
-                "score": None,
-                "feedback": feedback,
-            }).eq("id", submission_id).execute()
+            exam_file = load_exam_file(quiz_key)
 
-            return {
-                "status": "needs_teacher",
-                "score": None,
-                "feedback": feedback,
-            }
+            if rubric_rows:
+                rubric_row = rubric_rows[0]
+                problem = (
+                    rubric_row.get("problem", "")
+                    or "Use the attached official exam/questions file."
+                )
+                rubric_text = rubric_row.get("rubric", "").strip()
+            else:
+                problem = "Use the attached official exam/questions file."
+                rubric_text = ""
 
-        images = []
+            if not rubric_text:
+                rubric_text = (
+                    "Grade the entire submitted exam out of 100. "
+                    "Use the official exam/questions file as the source of the questions. "
+                    "Give 0 points for questions or subquestions that were not answered. "
+                    "Deduct points proportionally for mathematical errors and incomplete reasoning. "
+                    "Accept any mathematically valid solution method. "
+                    "Do not rescale a partially submitted exam to 100."
+                )
 
-        for path in uploaded_paths:
-            raw = sb.storage.from_("mini-check-files").download(path)
+            if exam_file is None and not rubric_rows:
+                feedback = "העבודה התקבלה. קובץ שאלות הבחינה לא נמצא ולכן נדרשת בדיקת מרצה."
+                sb.table("mini_check_submissions").update({
+                    "status": "needs_teacher",
+                    "score": None,
+                    "feedback": feedback,
+                }).eq("id", submission_id).execute()
 
-            ext = os.path.splitext(path)[1].lower()
-            mime = {
-                ".png": "image/png",
-                ".jpg": "image/jpeg",
-                ".jpeg": "image/jpeg",
-            }.get(ext, "image/jpeg")
+                return {
+                    "status": "needs_teacher",
+                    "score": None,
+                    "feedback": feedback,
+                }
 
-            images.append((raw, mime))
+            images = []
 
-        grade = openai_grade(
-            problem=problem,
-            rubric_text=rubric_text,
-            image_bytes=images,
-            exam_file=exam_file
-        )
+            for path in uploaded_paths:
+                raw = sb.storage.from_("mini-check-files").download(path)
+
+                ext = os.path.splitext(path)[1].lower()
+                mime = {
+                    ".png": "image/png",
+                    ".jpg": "image/jpeg",
+                    ".jpeg": "image/jpeg",
+                }.get(ext, "image/jpeg")
+
+                images.append((raw, mime))
+
+            grade = openai_grade(
+                problem=problem,
+                rubric_text=rubric_text,
+                image_bytes=images,
+                exam_file=exam_file
+            )
 
         uncertain = (
             grade["needs_teacher"]
@@ -711,7 +820,7 @@ def submit():
             "status": "submitted"
         }).execute()
 
-        # The student decides when to start AI grading.
+        # The student page starts AI grading immediately after this response.
         return jsonify(
             submission_id=sid,
             files=len(uploaded_paths),
