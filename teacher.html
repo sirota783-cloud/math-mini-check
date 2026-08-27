@@ -16,234 +16,385 @@ window.MathJax = {
 <script defer src="https://cdn.jsdelivr.net/npm/mathjax@4/tex-chtml.js"></script>
 
 <style>
+:root {
+  --ink:#173653;
+  --muted:#60768a;
+  --primary:#0aa8b7;
+  --primary-dark:#087f96;
+  --sky:#2e9ed8;
+  --sun:#f4c94b;
+  --paper:#fffefa;
+  --line:#d7e5ec;
+  --success:#278645;
+  --error:#b63e45;
+}
+
+*{box-sizing:border-box}
+
 body{
-  font-family:Arial,sans-serif;
-  max-width:1000px;
-  margin:30px auto;
-  padding:16px;
-  background:#fafafa;
+  min-height:100vh;
+  margin:0;
+  padding:28px 18px 50px;
+  color:var(--ink);
+  background:
+    radial-gradient(circle at 8% 12%,rgba(244,201,75,.18),transparent 24%),
+    radial-gradient(circle at 92% 14%,rgba(46,158,216,.15),transparent 28%),
+    linear-gradient(180deg,#f7fcfb 0%,#fffaf0 100%);
+  font-family:Arial,"Noto Sans Hebrew",sans-serif;
   text-align:right;
 }
+
+button,input,textarea,select{font:inherit}
+
+.page-shell{width:min(1080px,100%);margin:0 auto}
+
+.admin-hero{
+  display:grid;
+  grid-template-columns:150px 1fr;
+  gap:28px;
+  align-items:center;
+  min-height:170px;
+  padding:8px 24px 16px;
+}
+
+.admin-mascot-wrap{
+  position:relative;
+  display:grid;
+  place-items:center;
+  height:150px;
+}
+
+.admin-mascot-wrap::before{
+  content:"";
+  position:absolute;
+  width:132px;
+  height:132px;
+  border-radius:50%;
+  background:rgba(244,201,75,.23);
+  box-shadow:0 0 0 13px rgba(10,168,183,.06);
+}
+
+.admin-mascot{
+  position:relative;
+  width:118px;
+  max-height:145px;
+  object-fit:contain;
+  filter:drop-shadow(0 12px 14px rgba(23,54,83,.14));
+}
+
+.eyebrow{
+  display:inline-block;
+  margin:0 0 6px;
+  padding:7px 12px;
+  color:#12657b;
+  background:#e1f6f5;
+  border-radius:999px;
+  font-size:14px;
+  font-weight:800;
+}
+
+h1{margin:0;font-size:clamp(34px,5vw,52px);line-height:1.08}
+.admin-copy>p:not(.eyebrow){margin:10px 0 14px;color:var(--muted);font-size:17px;line-height:1.6}
+
+.back-link{
+  display:inline-flex;
+  padding:9px 14px;
+  color:var(--ink);
+  background:rgba(255,255,255,.75);
+  border:1px solid var(--line);
+  border-radius:999px;
+  text-decoration:none;
+  font-weight:800;
+}
+
+.back-link:hover{color:#fff;background:var(--primary-dark);border-color:var(--primary-dark)}
 
 .card{
-  background:white;
-  border:1px solid #ddd;
-  border-radius:14px;
-  padding:18px;
-  margin:14px 0;
+  padding:clamp(22px,4vw,34px);
+  margin:16px 0;
+  background:rgba(255,254,250,.97);
+  border:1px solid rgba(215,229,236,.95);
+  border-radius:22px;
+  box-shadow:0 18px 45px rgba(23,54,83,.09);
 }
 
-input,textarea,select,button{
-  font-size:16px;
-  padding:10px;
+.login-card{border-top:5px solid var(--primary)}
+.section-head{display:flex;align-items:flex-start;justify-content:space-between;gap:18px;margin-bottom:18px}
+.section-head h2,.section-head h3{margin:0}
+.section-head p{margin:5px 0 0;color:var(--muted);line-height:1.55}
+h2{margin:0 0 16px;font-size:clamp(24px,3vw,31px)}
+h3{color:var(--ink)}
+
+.login-row{display:grid;grid-template-columns:minmax(220px,1fr) 180px;gap:12px;align-items:end}
+.field{display:grid;gap:7px}
+.field label{font-weight:800}
+
+input,textarea,select{
   width:100%;
-  box-sizing:border-box;
-  margin:6px 0;
-}
-
-button{cursor:pointer}
-
-table{
-  width:100%;
-  border-collapse:collapse;
-  margin-top:15px;
-}
-
-th,td{
-  border-bottom:1px solid #ddd;
-  padding:9px;
-  text-align:right;
-}
-
-.error{
-  color:#a00;
-  font-weight:bold;
-}
-
-.success{
-  color:#087a20;
-  font-weight:bold;
-}
-
-.muted{
-  color:#666;
-}
-
-.work{
-  border:1px solid #ddd;
-  border-radius:10px;
-  padding:14px;
-  margin-top:12px;
-}
-
-.submission-page{
-  margin:18px 0;
-  padding:10px;
-  border:1px solid #ddd;
-  border-radius:10px;
+  min-height:47px;
+  padding:10px 13px;
+  color:var(--ink);
   background:#fff;
+  border:1px solid #bfd0da;
+  border-radius:12px;
+  outline:none;
 }
 
-.submission-page img{
-  display:block;
-  max-width:100%;
-  height:auto;
-  margin:0 auto;
+input:focus,textarea:focus,select:focus{
+  border-color:var(--primary);
+  box-shadow:0 0 0 4px rgba(10,168,183,.13);
 }
 
-.image-wrap{
-  position:relative;
-  display:block;
-  width:fit-content;
-  max-width:100%;
-  margin:0 auto;
-}
-
-.error-marker{
-  position:absolute;
-  border:3px solid #d40000;
-  background:transparent;
-  box-sizing:border-box;
-  pointer-events:none;
-  z-index:2;
-}
-
-.error-marker span{
-  position:absolute;
-  right:0;
-  bottom:100%;
-  max-width:260px;
-  padding:4px 7px;
-  background:#d40000;
+button{
+  width:100%;
+  min-height:47px;
+  padding:10px 15px;
   color:#fff;
-  font-size:14px;
-  font-weight:bold;
-  white-space:nowrap;
+  background:linear-gradient(135deg,var(--primary),var(--sky));
+  border:0;
+  border-radius:12px;
+  font-weight:800;
+  cursor:pointer;
+  box-shadow:0 7px 16px rgba(8,127,150,.16);
 }
 
-.page-label{
-  font-weight:bold;
-  margin-bottom:8px;
+button:hover:not(:disabled){filter:brightness(.97);transform:translateY(-1px)}
+button:disabled{cursor:not-allowed;opacity:.62}
+
+#teacher_logout{width:auto;min-width:120px;margin:0;color:var(--ink);background:#eef5f7;box-shadow:none}
+
+.controls-panel{
+  margin-top:23px;
+  padding-top:23px;
+  border-top:1px solid var(--line);
 }
-.summary{display:flex;flex-wrap:wrap;gap:8px;margin:12px 0}
-.counter,.status-badge{display:inline-block;border-radius:999px;padding:5px 10px;font-weight:bold}
+
+.filters-grid{
+  display:grid;
+  grid-template-columns:repeat(3,minmax(0,1fr));
+  gap:14px;
+}
+
+.actions-row{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:14px}
+#export_excel{background:linear-gradient(135deg,#278645,#50a96a)}
+
+.dashboard-grid{display:grid;grid-template-columns:1.15fr .85fr;gap:16px;align-items:start}
+.dashboard-grid>.card{margin:0}
+
+.student-form{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.button-pair{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:12px}
+#reset_student_pin{color:var(--ink);background:#eef5f7;box-shadow:none}
+
+.upload-form{display:grid;gap:13px}
+
+#students_list{margin-top:16px}
+#students_list .box{
+  padding:13px;
+  margin-bottom:9px;
+  background:#f7fbfc;
+  border:1px solid var(--line);
+  border-radius:13px;
+}
+#students_list .box button{margin-top:9px;background:#68869b;box-shadow:none}
+
+.summary{display:flex;flex-wrap:wrap;gap:8px;margin:14px 0}
+.counter,.status-badge{display:inline-block;border-radius:999px;padding:6px 11px;font-weight:800}
 .counter{background:#eef2f7}
 .status-submitted{background:#fff3cd;color:#664d03}
 .status-grading{background:#cfe2ff;color:#084298}
 .status-graded{background:#d1e7dd;color:#0f5132}
 .status-needs_teacher{background:#ffe5d0;color:#7a3500}
 .status-error{background:#f8d7da;color:#842029}
+
+.error{color:var(--error);font-weight:800}
+.success{color:var(--success);font-weight:800}
+.muted{color:var(--muted)}
+
+#works{margin-top:18px}
+#works>.card{border-right:5px solid #b8dfe5}
+#works>.card h3{margin-top:0;font-size:22px}
+
+.work{padding:15px;margin-top:12px;border:1px solid var(--line);border-radius:13px;background:#fff}
+
+table{width:100%;margin-top:15px;border-collapse:collapse;background:#fff;border-radius:12px;overflow:hidden}
+th,td{padding:10px;border-bottom:1px solid var(--line);text-align:right}
+th{background:#edf7f9;color:#28596c}
+
+.submission-page{margin:18px 0;padding:12px;border:1px solid var(--line);border-radius:13px;background:#fff}
+.submission-page img{display:block;max-width:100%;height:auto;margin:0 auto}
+.image-wrap{position:relative;display:block;width:fit-content;max-width:100%;margin:0 auto}
+.page-label{margin-bottom:8px;font-weight:800}
+
+.error-marker{position:absolute;z-index:2;box-sizing:border-box;border:3px solid #d40000;background:transparent;pointer-events:none}
+.error-marker span{position:absolute;right:0;bottom:100%;max-width:260px;padding:4px 7px;color:#fff;background:#d40000;font-size:14px;font-weight:bold;white-space:nowrap}
+
+[contenteditable="true"]{border-radius:12px!important;border-color:#bfd0da!important;background:#fff}
+
+@media(max-width:800px){
+  .admin-hero{grid-template-columns:110px 1fr;padding-inline:8px}
+  .admin-mascot-wrap{height:120px}
+  .admin-mascot{width:92px;max-height:115px}
+  .admin-mascot-wrap::before{width:100px;height:100px}
+  .dashboard-grid{grid-template-columns:1fr}
+  .filters-grid{grid-template-columns:1fr}
+}
+
+@media(max-width:560px){
+  body{padding:18px 11px 34px}
+  .admin-hero{grid-template-columns:1fr;text-align:center}
+  .admin-mascot-wrap{order:2}
+  .admin-copy{order:1}
+  .login-row,.student-form,.button-pair,.actions-row{grid-template-columns:1fr}
+  .section-head{flex-direction:column}
+  #teacher_logout{width:100%}
+}
 </style>
 </head>
 
 <body>
 
-<h1>מרצה</h1>
+<div class="page-shell">
+  <header class="admin-hero">
+    <div class="admin-mascot-wrap" aria-hidden="true">
+      <img class="admin-mascot" src="robot-math.png" alt="">
+    </div>
 
-<p>
-<a href="index.html">← חזרה לדף ההגשה</a>
-</p>
+    <div class="admin-copy">
+      <p class="eyebrow">מרכז הבקרה</p>
+      <h1>לוח המרצה</h1>
+      <p>עבודות, ציונים ותלמידים במקום אחד.</p>
+      <a class="back-link" href="index.html">← חזרה לדף ההגשה</a>
+    </div>
+  </header>
 
-<div class="card" id="login_card">
+  <section class="card login-card" id="login_card">
+    <div class="section-head">
+      <div>
+        <h2>כניסת מרצה</h2>
+        <p>הסיסמה נשמרת רק בזמן שהכרטיסייה פתוחה.</p>
+      </div>
+      <button id="teacher_logout" style="display:none">יציאה</button>
+    </div>
 
-<h2>כניסת מרצה</h2>
+    <div class="login-row">
+      <div class="field">
+        <label for="teacher_password">סיסמת מרצה</label>
+        <input id="teacher_password" type="password" placeholder="הזנת סיסמה">
+      </div>
+      <button id="teacher_login">כניסה</button>
+    </div>
 
-<input
-  id="teacher_password"
-  type="password"
-  placeholder="סיסמת מרצה"
->
+    <p id="login_status"></p>
 
-<button id="teacher_login">כניסה</button>
-<button id="teacher_logout" style="display:none">יציאה</button>
+    <div id="teacher_controls" class="controls-panel" style="display:none">
+      <div class="section-head">
+        <div>
+          <h3>עבודות וציונים</h3>
+          <p>בחרו מסננים להצגת העבודות או להורדת קובץ Excel.</p>
+        </div>
+      </div>
 
-<p id="login_status"></p>
+      <div class="filters-grid">
+        <div class="field">
+          <label for="course_filter">מקצוע</label>
+          <select id="course_filter">
+            <option value="MATH">מתמטיקה — קורס הכנה</option>
+            <option value="DISCRETE">מתמטיקה בדידה</option>
+            <option value="ALL">כל המקצועות</option>
+          </select>
+        </div>
 
-<div id="teacher_controls" style="display:none">
+        <div class="field">
+          <label for="quiz_filter">מספר תרגול</label>
+          <select id="quiz_filter">
+            <option value="ALL">כל התרגולים</option>
+          </select>
+        </div>
 
-<button id="load">הצגת עבודות</button>
+        <div class="field">
+          <label for="status_filter">מצב בדיקה</label>
+          <select id="status_filter">
+            <option value="ALL">כל העבודות</option>
+            <option value="UNGRADED">ללא ציון</option>
+            <option value="submitted">לא נבדק</option>
+            <option value="grading">בבדיקה</option>
+            <option value="needs_teacher">לבדיקת מרצה</option>
+            <option value="graded">נבדק</option>
+            <option value="error">שגיאה</option>
+          </select>
+        </div>
+      </div>
 
-<label for="course_filter"><strong>מקצוע:</strong></label>
-<select id="course_filter">
-  <option value="MATH">מתמטיקה — קורס הכנה</option>
-  <option value="DISCRETE">מתמטיקה בדידה</option>
-  <option value="ALL">כל המקצועות</option>
-</select>
+      <div class="actions-row">
+        <button id="load">הצגת עבודות</button>
+        <button id="export_excel">הורדת ציונים ל-Excel</button>
+      </div>
 
-<label for="quiz_filter"><strong>מספר תרגול:</strong></label>
-<select id="quiz_filter">
-  <option value="ALL">כל התרגולים</option>
-</select>
+      <p id="export_status"></p>
+      <div id="summary" class="summary"></div>
+      <p id="status"></p>
+    </div>
+  </section>
 
-<label for="status_filter"><strong>מצב בדיקה:</strong></label>
-<select id="status_filter">
-  <option value="ALL">כל העבודות</option>
-  <option value="UNGRADED">ללא ציון</option>
-  <option value="submitted">לא נבדק</option>
-  <option value="grading">בבדיקה</option>
-  <option value="needs_teacher">לבדיקת מרצה</option>
-  <option value="graded">נבדק</option>
-  <option value="error">שגיאה</option>
-</select>
+  <div class="dashboard-grid">
+    <section class="card" id="students_card" style="display:none">
+      <div class="section-head">
+        <div>
+          <h2>ניהול תלמידים</h2>
+          <p>הוספת תלמיד, החלפת PIN או חסימת גישה.</p>
+        </div>
+      </div>
 
-<button id="export_excel">הורדת ציונים ל-Excel</button>
-<p id="export_status"></p>
+      <button id="load_students">הצגת תלמידים רשומים</button>
 
-<div id="summary" class="summary"></div>
+      <div class="student-form">
+        <div class="field">
+          <label for="new_student_code">קוד סטודנט</label>
+          <input id="new_student_code" type="text" placeholder="לדוגמה: MATH-1020">
+        </div>
+        <div class="field">
+          <label for="new_student_pin">PIN חדש</label>
+          <input id="new_student_pin" type="password" placeholder="לפחות 4 תווים">
+        </div>
+      </div>
 
-<p id="status"></p>
+      <div class="button-pair">
+        <button id="add_student">הוספת תלמיד</button>
+        <button id="reset_student_pin">החלפת PIN לתלמיד קיים</button>
+      </div>
 
+      <p id="students_status"></p>
+      <div id="students_list"></div>
+    </section>
+
+    <section class="card" id="protected_card" style="display:none">
+      <div class="section-head">
+        <div>
+          <h2>העלאת שאלות הבחינה</h2>
+          <p>קובץ השאלות והפתרון לבדיקת התרגיל.</p>
+        </div>
+      </div>
+
+      <div class="upload-form">
+        <div class="field">
+          <label for="exam_code">קוד הבחינה</label>
+          <input id="exam_code" type="text" placeholder="לדוגמה: MATH-6">
+        </div>
+
+        <div class="field">
+          <label for="exam_file">קובץ שאלות הבחינה</label>
+          <input id="exam_file" type="file" accept="image/*,.pdf">
+        </div>
+
+        <button id="upload_exam">העלאת שאלות</button>
+      </div>
+
+      <p id="exam_upload_status"></p>
+    </section>
+  </div>
+
+  <div id="works" style="display:none"></div>
 </div>
-
-</div>
-
-<div class="card" id="students_card" style="display:none">
-  <h2>ניהול תלמידים</h2>
-
-  <button id="load_students">הצגת תלמידים רשומים</button>
-
-  <label for="new_student_code"><strong>קוד סטודנט:</strong></label>
-  <input id="new_student_code" type="text" placeholder="לדוגמה: MATH-1020">
-
-  <label for="new_student_pin"><strong>PIN חדש:</strong></label>
-  <input id="new_student_pin" type="password" placeholder="לפחות 4 תווים">
-
-  <button id="add_student">הוספת תלמיד</button>
-  <button id="reset_student_pin">החלפת PIN לתלמיד קיים</button>
-
-  <p id="students_status"></p>
-  <div id="students_list"></div>
-</div>
-
-<div class="card" id="protected_card" style="display:none">
-
-<h2>העלאת שאלות הבחינה</h2>
-
-<label>קוד הבחינה:</label>
-
-<input
-  id="exam_code"
-  type="text"
-  placeholder="לדוגמה: test-001"
->
-
-<label>קובץ שאלות הבחינה:</label>
-
-<input
-  id="exam_file"
-  type="file"
-  accept="image/*,.pdf"
->
-
-<button id="upload_exam">
-העלאת שאלות
-</button>
-
-<p id="exam_upload_status"></p>
-
-</div>
-
-<div id="works" style="display:none"></div>
 
 <script>
 
