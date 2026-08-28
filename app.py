@@ -3,15 +3,12 @@ import hashlib
 import uuid
 import json
 import base64
-import re
-import io
-import zipfile
 import urllib.request
 import urllib.error
-from datetime import datetime, timezone
-from xml.sax.saxutils import escape
+from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
-from flask import Flask, request, jsonify, render_template_string, send_file
+from flask import Flask, request, jsonify, render_template_string
 from flask_cors import CORS
 from supabase import create_client
 
@@ -19,35 +16,30 @@ from supabase import create_client
 app = Flask(__name__)
 CORS(app)
 
-SUPABASE_URL = os.environ["SUPABASE_URL"].rstrip("/")
-SUPABASE_SERVICE_KEY = os.environ["SUPABASE_SERVICE_KEY"]
-
 sb = create_client(
-    SUPABASE_URL,
-    SUPABASE_SERVICE_KEY
+    os.environ["SUPABASE_URL"],
+    os.environ["SUPABASE_SERVICE_KEY"]
 )
 
 TEACHER_KEY = os.environ["TEACHER_KEY"]
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "").strip()
 OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-5").strip()
 AUTO_GRADE_CONFIDENCE = float(os.environ.get("AUTO_GRADE_CONFIDENCE", "0.75"))
+AI_DAILY_LIMIT = max(1, int(os.environ.get("AI_DAILY_LIMIT", "60")))
+AI_ESTIMATED_COST_PER_CHECK = max(
+    0.0,
+    float(os.environ.get("AI_ESTIMATED_COST_PER_CHECK", "0.27"))
+)
+AI_LIMIT_TIMEZONE = os.environ.get(
+    "AI_LIMIT_TIMEZONE",
+    "Asia/Jerusalem"
+).strip() or "Asia/Jerusalem"
 
 
 def phash(code, pin):
     return hashlib.sha256(
         (code + "|" + pin).encode()
     ).hexdigest()
-
-
-def normalize_student_code(value):
-    """
-    Make harmless spelling differences equivalent:
-    "Math 1004", "math-1004" and "MATH-1004" -> "MATH-1004".
-    """
-    value = str(value or "").strip().upper()
-    value = re.sub(r"[\s_]+", "-", value)
-    value = re.sub(r"-+", "-", value)
-    return value.strip("-")
 
 
 def teacher_ok():
@@ -57,46 +49,19 @@ def teacher_ok():
     )
 
 
-def student_access_identity(code, pin):
-    """
-    Resolve an active code/PIN without breaking historical mixed-case codes.
-
-    PIN hashes in existing rows were calculated from the spelling originally
-    used when the student was registered. Therefore each candidate must be
-    checked with its stored code, while new submissions use a canonical code.
-    """
-    canonical_code = normalize_student_code(code)
-    if not canonical_code or not pin:
-        return None
-
+def student_access_ok(code, pin):
+    """Return True only for an active, registered code/PIN pair."""
     rows = (
         sb.table("mini_check_student_access")
-        .select("student_code,pin_hash")
+        .select("student_code")
+        .eq("student_code", code)
+        .eq("pin_hash", phash(code, pin))
         .eq("active", True)
+        .limit(1)
         .execute()
         .data
     )
-
-    for row in rows:
-        stored_code = str(row.get("student_code", "")).strip()
-        stored_hash = str(row.get("pin_hash", ""))
-
-        if (
-            normalize_student_code(stored_code) == canonical_code
-            and stored_hash == phash(stored_code, pin)
-        ):
-            return {
-                "student_code": canonical_code,
-                "pin_hash": stored_hash,
-                "registered_code": stored_code,
-            }
-
-    return None
-
-
-def student_access_ok(code, pin):
-    """Compatibility wrapper for simple access checks."""
-    return student_access_identity(code, pin) is not None
+    return bool(rows)
 
 
 def teacher_password_ok(password):
@@ -148,286 +113,60 @@ def split_quiz_key(value):
     }
 
 
-def normalized_submission_status(row):
-    value = str(row.get("status", "")).strip().lower()
-    if value == "graded" and row.get("score") is not None:
-        return "graded"
-    if value in {"submitted", "grading", "needs_teacher", "error"}:
-        return value
-    return "graded" if row.get("score") is not None else "submitted"
-
-
-def grouped_submission_rows(rows):
-    """Match the grouping shown on the teacher page."""
-    groups = {}
-
-    for row in rows:
-        parts = split_quiz_key(row.get("quiz_id"))
-        course_id = parts.get("course_id") or "legacy"
-        group_id = parts.get("group_id") or "general"
-        quiz_id = parts.get("quiz_id") or ""
-        student_code = normalize_student_code(row.get("student_code"))
-        key = (course_id, group_id, quiz_id, student_code)
-
-        group = groups.setdefault(key, {
-            "student_code": student_code,
-            "course_id": course_id,
-            "group_id": group_id,
-            "quiz_id": quiz_id,
-            "rows": [],
-        })
-        group["rows"].append(row)
-
-    output = []
-
-    for group in groups.values():
-        statuses = [
-            normalized_submission_status(row)
-            for row in group["rows"]
-        ]
-
-        if "error" in statuses:
-            status = "error"
-        elif "grading" in statuses:
-            status = "grading"
-        elif "needs_teacher" in statuses:
-            status = "needs_teacher"
-        elif statuses and all(value == "graded" for value in statuses):
-            status = "graded"
-        else:
-            status = "submitted"
-
-        numeric_scores = []
-        for row in group["rows"]:
-            value = row.get("score")
-            if value is None:
-                continue
-            try:
-                numeric_scores.append(float(value))
-            except (TypeError, ValueError):
-                continue
-
-        unique_scores = sorted(set(numeric_scores))
-        score = unique_scores[0] if len(unique_scores) == 1 else None
-        if isinstance(score, float) and score.is_integer():
-            score = int(score)
-
-        feedback_values = []
-        for row in group["rows"]:
-            value = str(row.get("feedback", "") or "").strip()
-            if value and value not in feedback_values:
-                feedback_values.append(value)
-
-        if len(feedback_values) == 1:
-            feedback = feedback_values[0]
-        elif len(feedback_values) > 1:
-            feedback = "קיימות הערות שונות בין חלקי ההגשה"
-        else:
-            feedback = ""
-
-        dates = [
-            str(row.get("created_at", "") or "").strip()
-            for row in group["rows"]
-            if row.get("created_at")
-        ]
-
-        output.append({
-            **{k: v for k, v in group.items() if k != "rows"},
-            "status": status,
-            "score": score,
-            "feedback": feedback,
-            "created_at": max(dates) if dates else "",
-            "has_no_score": len(numeric_scores) == 0,
-        })
-
-    return output
-
-
-def excel_column_name(number):
-    result = ""
-    while number:
-        number, remainder = divmod(number - 1, 26)
-        result = chr(65 + remainder) + result
-    return result
-
-
-def excel_datetime_serial(value):
-    if not value:
-        return None
+def ai_limit_timezone():
     try:
-        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
-        if parsed.tzinfo is not None:
-            parsed = parsed.astimezone(timezone.utc).replace(tzinfo=None)
-        origin = datetime(1899, 12, 30)
-        return (parsed - origin).total_seconds() / 86400
-    except (TypeError, ValueError):
-        return None
+        return ZoneInfo(AI_LIMIT_TIMEZONE)
+    except Exception:
+        return timezone.utc
 
 
-def build_grades_xlsx(records):
-    """Build a compact, right-to-left Excel workbook without extra packages."""
-    headers = [
-        "קוד סטודנט",
-        "מקצוע",
-        "קבוצה",
-        "מספר תרגול",
-        "ציון",
-        "מצב",
-        "תאריך הגשה",
-    ]
+def ai_day_bounds(now=None):
+    tz = ai_limit_timezone()
+    local_now = now.astimezone(tz) if now else datetime.now(tz)
+    start = local_now.replace(hour=0, minute=0, second=0, microsecond=0)
+    return start, start + timedelta(days=1)
 
-    status_labels = {
-        "submitted": "לא נבדק",
-        "grading": "בבדיקה",
-        "graded": "נבדק",
-        "needs_teacher": "לבדיקת מרצה",
-        "error": "שגיאה",
-    }
-    course_labels = {
-        "MATH": "מתמטיקה — קורס הכנה",
-        "DISCRETE": "מתמטיקה בדידה",
-        "legacy": "הגשות ישנות",
-        "general": "כללי",
-    }
 
-    table_rows = []
-    for record in records:
-        table_rows.append([
-            record.get("student_code", ""),
-            course_labels.get(
-                record.get("course_id"),
-                record.get("course_id", "")
-            ),
-            record.get("group_id", ""),
-            record.get("quiz_id", ""),
-            record.get("score"),
-            status_labels.get(
-                record.get("status"),
-                record.get("status", "")
-            ),
-            record.get("created_at", ""),
-        ])
+def log_ai_event(
+    submission_id,
+    student_code,
+    quiz_key,
+    event_type,
+    error_reason="",
+):
+    """Best-effort audit event; logging must never erase a valid grade."""
+    try:
+        sb.table("mini_check_ai_events").insert({
+            "submission_id": submission_id,
+            "student_code": str(student_code or "").strip(),
+            "quiz_id": str(quiz_key or "").strip(),
+            "event_type": str(event_type or "").strip(),
+            "error_reason": str(error_reason or "").strip()[:2000] or None,
+        }).execute()
+    except Exception as event_error:
+        print("AI EVENT LOG ERROR:", repr(event_error), flush=True)
 
-    def inline_cell(reference, value, style=2):
-        text = escape(str(value if value is not None else ""))
-        return (
-            f'<c r="{reference}" t="inlineStr" s="{style}">'
-            f'<is><t xml:space="preserve">{text}</t></is></c>'
-        )
 
-    def number_cell(reference, value, style=4):
-        return f'<c r="{reference}" t="n" s="{style}"><v>{value}</v></c>'
-
-    xml_rows = []
-    header_cells = [
-        inline_cell(f"{excel_column_name(index)}1", value, 1)
-        for index, value in enumerate(headers, start=1)
-    ]
-    xml_rows.append(
-        '<row r="1" ht="24" customHeight="1">'
-        + "".join(header_cells)
-        + "</row>"
-    )
-
-    for row_number, values in enumerate(table_rows, start=2):
-        cells = []
-        for column_number, value in enumerate(values, start=1):
-            reference = f"{excel_column_name(column_number)}{row_number}"
-            if column_number == 5 and value is not None:
-                cells.append(number_cell(reference, value, 4))
-            elif column_number == 7:
-                serial = excel_datetime_serial(value)
-                if serial is None:
-                    cells.append(inline_cell(reference, value, 2))
-                else:
-                    cells.append(number_cell(reference, serial, 3))
-            else:
-                cells.append(inline_cell(reference, value, 2))
-        xml_rows.append(f'<row r="{row_number}">' + "".join(cells) + "</row>")
-
-    last_row = max(1, len(table_rows) + 1)
-    created = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
-
-    sheet_xml = f'''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
-  <dimension ref="A1:G{last_row}"/>
-  <sheetViews><sheetView workbookViewId="0" rightToLeft="1"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews>
-  <sheetFormatPr defaultRowHeight="18"/>
-  <cols>
-    <col min="1" max="1" width="18" customWidth="1"/>
-    <col min="2" max="2" width="28" customWidth="1"/>
-    <col min="3" max="3" width="14" customWidth="1"/>
-    <col min="4" max="4" width="14" customWidth="1"/>
-    <col min="5" max="5" width="11" customWidth="1"/>
-    <col min="6" max="6" width="18" customWidth="1"/>
-    <col min="7" max="7" width="21" customWidth="1"/>
-  </cols>
-  <sheetData>{''.join(xml_rows)}</sheetData>
-  <autoFilter ref="A1:G{last_row}"/>
-</worksheet>'''
-
-    styles_xml = '''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
-  <numFmts count="1"><numFmt numFmtId="164" formatCode="yyyy-mm-dd hh:mm"/></numFmts>
-  <fonts count="2">
-    <font><sz val="11"/><name val="Arial"/></font>
-    <font><b/><color rgb="FFFFFFFF"/><sz val="11"/><name val="Arial"/></font>
-  </fonts>
-  <fills count="3">
-    <fill><patternFill patternType="none"/></fill>
-    <fill><patternFill patternType="gray125"/></fill>
-    <fill><patternFill patternType="solid"><fgColor rgb="FF4472C4"/><bgColor indexed="64"/></patternFill></fill>
-  </fills>
-  <borders count="2">
-    <border><left/><right/><top/><bottom/><diagonal/></border>
-    <border><left style="thin"><color rgb="FFD9E2F3"/></left><right style="thin"><color rgb="FFD9E2F3"/></right><top style="thin"><color rgb="FFD9E2F3"/></top><bottom style="thin"><color rgb="FFD9E2F3"/></bottom><diagonal/></border>
-  </borders>
-  <cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
-  <cellXfs count="5">
-    <xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>
-    <xf numFmtId="0" fontId="1" fillId="2" borderId="1" xfId="0" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>
-    <xf numFmtId="0" fontId="0" fillId="0" borderId="1" xfId="0" applyAlignment="1"><alignment horizontal="right" vertical="center" wrapText="1"/></xf>
-    <xf numFmtId="164" fontId="0" fillId="0" borderId="1" xfId="0" applyNumberFormat="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>
-    <xf numFmtId="0" fontId="0" fillId="0" borderId="1" xfId="0" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>
-  </cellXfs>
-  <cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>
-</styleSheet>'''
-
-    files = {
-        "[Content_Types].xml": '''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
-  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
-  <Default Extension="xml" ContentType="application/xml"/>
-  <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
-  <Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
-  <Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>
-  <Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/>
-  <Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/>
-</Types>''',
-        "_rels/.rels": '''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
-  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
-  <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/>
-  <Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/extended-properties" Target="docProps/app.xml"/>
-</Relationships>''',
-        "docProps/app.xml": '''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties" xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes"><Application>Math Mini Check</Application></Properties>''',
-        "docProps/core.xml": f'''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"><dc:creator>Leonid Sirota</dc:creator><dc:title>Math Mini Check Grades</dc:title><dcterms:created xsi:type="dcterms:W3CDTF">{created}</dcterms:created></cp:coreProperties>''',
-        "xl/workbook.xml": '''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><bookViews><workbookView/></bookViews><sheets><sheet name="ציונים" sheetId="1" r:id="rId1"/></sheets></workbook>''',
-        "xl/_rels/workbook.xml.rels": '''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>''',
-        "xl/styles.xml": styles_xml,
-        "xl/worksheets/sheet1.xml": sheet_xml,
-    }
-
-    output = io.BytesIO()
-    with zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as archive:
-        for path, content in files.items():
-            archive.writestr(path, content.encode("utf-8"))
-    output.seek(0)
-    return output
+def claim_student_ai_slot(submission_id, student_code, quiz_key):
+    """Atomically reserve one place in today's automatic-AI allowance."""
+    day_start, day_end = ai_day_bounds()
+    result = sb.rpc(
+        "mini_check_claim_ai_slot",
+        {
+            "p_submission_id": submission_id,
+            "p_student_code": str(student_code or "").strip(),
+            "p_quiz_id": str(quiz_key or "").strip(),
+            "p_daily_limit": AI_DAILY_LIMIT,
+            "p_day_start": day_start.isoformat(),
+            "p_day_end": day_end.isoformat(),
+        },
+    ).execute()
+    value = result.data
+    if isinstance(value, list):
+        value = value[0] if value else False
+    if isinstance(value, dict):
+        value = next(iter(value.values()), False)
+    return value is True or str(value).lower() == "true"
 
 
 def safe_json_from_text(text):
@@ -576,92 +315,6 @@ or you are not sufficiently confident.
         "confidence": confidence,
         "needs_teacher": needs_teacher,
     }
-
-
-def signed_image_urls(uploaded_paths, expires_in=900):
-    """Create short-lived URLs for the existing Supabase AI function."""
-    urls = []
-
-    for path in uploaded_paths:
-        result = (
-            sb.storage
-            .from_("mini-check-files")
-            .create_signed_url(path, expires_in)
-        )
-
-        signed_url = (
-            result.get("signedURL")
-            or result.get("signedUrl")
-            or result.get("signed_url")
-        )
-
-        if not signed_url:
-            raise RuntimeError(
-                f"Could not create signed URL for {path}"
-            )
-
-        urls.append(signed_url)
-
-    return urls
-
-
-def edge_function_grade(quiz_key, image_urls):
-    """
-    Use the same Supabase AI checker that already works on the teacher page.
-    This avoids requiring a second OpenAI key/configuration on Render.
-    """
-    body = json.dumps({
-        "image_urls": image_urls,
-        "quiz_id": quiz_key,
-    }).encode("utf-8")
-
-    req = urllib.request.Request(
-        SUPABASE_URL + "/functions/v1/ai-check-submission",
-        data=body,
-        method="POST",
-        headers={
-            "apikey": SUPABASE_SERVICE_KEY,
-            "Content-Type": "application/json",
-        },
-    )
-
-    try:
-        with urllib.request.urlopen(req, timeout=120) as response:
-            payload = json.loads(response.read().decode("utf-8"))
-    except urllib.error.HTTPError as e:
-        details = e.read().decode("utf-8", errors="replace")
-        raise RuntimeError(
-            f"Supabase AI HTTP {e.code}: {details[:500]}"
-        )
-    except Exception as e:
-        raise RuntimeError(f"Supabase AI request failed: {e}")
-
-    score = payload.get("score")
-    if score is not None:
-        score = float(score)
-        if score.is_integer():
-            score = int(score)
-
-    confidence_value = payload.get("confidence")
-    confidence = (
-        float(confidence_value)
-        if confidence_value is not None
-        else 1.0
-    )
-
-    status = str(payload.get("status", "")).strip().lower()
-    needs_teacher = bool(payload.get("needs_teacher", False))
-    if status in {"needs_teacher", "teacher_review"}:
-        needs_teacher = True
-
-    return {
-        "score": score,
-        "feedback": str(payload.get("feedback", "")).strip(),
-        "confidence": confidence,
-        "needs_teacher": needs_teacher,
-    }
-
-
 def load_exam_file(quiz_key):
     """
     Loads the official exam file from Supabase Storage.
@@ -698,97 +351,102 @@ def load_exam_file(quiz_key):
     print("EXAM FILE NOT FOUND FOR:", quiz_key, flush=True)
     return None
     
-def auto_grade_submission(submission_id, quiz_key, uploaded_paths):
+def auto_grade_submission(
+    submission_id,
+    quiz_key,
+    uploaded_paths,
+    student_code="",
+):
     """
     Returns the final public status and score.
     Any failure sends the work to teacher review instead of losing it.
     """
     try:
-        grade = None
+        rubric_rows = (
+            sb.table("mini_check_rubrics")
+            .select("problem,rubric")
+            .eq("quiz_id", quiz_key)
+            .limit(1)
+            .execute()
+            .data
+        )
 
-        # Primary path: reuse the Supabase Edge Function already used by the
-        # teacher page. It has the working OpenAI configuration and exam-file
-        # lookup, so student auto-grading behaves exactly like manual grading.
-        try:
-            image_urls = signed_image_urls(uploaded_paths)
-            grade = edge_function_grade(quiz_key, image_urls)
-        except Exception as edge_error:
-            print("SUPABASE EDGE GRADE ERROR:", edge_error, flush=True)
+        # The official exam PDF/image is enough to enable automatic grading.
+        # A teacher rubric, when present, overrides the default instructions.
+        exam_file = load_exam_file(quiz_key)
 
-        # Optional fallback for installations that also configured an OpenAI
-        # key on Render. The current deployment can work without this key.
-        if grade is None:
-            if not OPENAI_API_KEY:
-                raise RuntimeError(
-                    "Supabase AI failed and OPENAI_API_KEY is not configured"
-                )
+        if rubric_rows:
+            rubric_row = rubric_rows[0]
+            problem = rubric_row.get("problem", "") or "Use the attached official exam/questions file."
+            rubric_text = rubric_row.get("rubric", "").strip()
+        else:
+            problem = "Use the attached official exam/questions file."
+            rubric_text = ""
 
-            rubric_rows = (
-                sb.table("mini_check_rubrics")
-                .select("problem,rubric")
-                .eq("quiz_id", quiz_key)
-                .limit(1)
-                .execute()
-                .data
+        if not rubric_text:
+            rubric_text = (
+                "Grade the entire submitted exam out of 100. "
+                "Use the official exam/questions file as the source of the questions. "
+                "Give 0 points for questions or subquestions that were not answered. "
+                "Deduct points proportionally for mathematical errors and incomplete reasoning. "
+                "Accept any mathematically valid solution method. "
+                "Do not rescale a partially submitted exam to 100."
             )
 
-            exam_file = load_exam_file(quiz_key)
+        if exam_file is None and not rubric_rows:
+            feedback = "העבודה התקבלה. קובץ שאלות הבחינה לא נמצא ולכן נדרשת בדיקת מרצה."
+            sb.table("mini_check_submissions").update({
+                "status": "needs_teacher",
+                "score": None,
+                "feedback": feedback,
+            }).eq("id", submission_id).execute()
 
-            if rubric_rows:
-                rubric_row = rubric_rows[0]
-                problem = (
-                    rubric_row.get("problem", "")
-                    or "Use the attached official exam/questions file."
-                )
-                rubric_text = rubric_row.get("rubric", "").strip()
-            else:
-                problem = "Use the attached official exam/questions file."
-                rubric_text = ""
+            return {
+                "status": "needs_teacher",
+                "score": None,
+                "feedback": feedback,
+            }
 
-            if not rubric_text:
-                rubric_text = (
-                    "Grade the entire submitted exam out of 100. "
-                    "Use the official exam/questions file as the source of the questions. "
-                    "Give 0 points for questions or subquestions that were not answered. "
-                    "Deduct points proportionally for mathematical errors and incomplete reasoning. "
-                    "Accept any mathematically valid solution method. "
-                    "Do not rescale a partially submitted exam to 100."
-                )
+        images = []
 
-            if exam_file is None and not rubric_rows:
-                feedback = "העבודה התקבלה. קובץ שאלות הבחינה לא נמצא ולכן נדרשת בדיקת מרצה."
-                sb.table("mini_check_submissions").update({
-                    "status": "needs_teacher",
-                    "score": None,
-                    "feedback": feedback,
-                }).eq("id", submission_id).execute()
+        for path in uploaded_paths:
+            raw = sb.storage.from_("mini-check-files").download(path)
 
-                return {
-                    "status": "needs_teacher",
-                    "score": None,
-                    "feedback": feedback,
-                }
+            ext = os.path.splitext(path)[1].lower()
+            mime = {
+                ".png": "image/png",
+                ".jpg": "image/jpeg",
+                ".jpeg": "image/jpeg",
+            }.get(ext, "image/jpeg")
 
-            images = []
+            images.append((raw, mime))
 
-            for path in uploaded_paths:
-                raw = sb.storage.from_("mini-check-files").download(path)
-
-                ext = os.path.splitext(path)[1].lower()
-                mime = {
-                    ".png": "image/png",
-                    ".jpg": "image/jpeg",
-                    ".jpeg": "image/jpeg",
-                }.get(ext, "image/jpeg")
-
-                images.append((raw, mime))
-
-            grade = openai_grade(
-                problem=problem,
-                rubric_text=rubric_text,
-                image_bytes=images,
-                exam_file=exam_file
+        if not claim_student_ai_slot(
+            submission_id=submission_id,
+            student_code=student_code,
+            quiz_key=quiz_key,
+        ):
+            feedback = (
+                "העבודה נשמרה. המכסה היומית של בדיקות AI הסתיימה. "
+                "המרצה יוכל לבדוק את העבודה או להפעיל בדיקה בהמשך."
             )
+            sb.table("mini_check_submissions").update({
+                "status": "submitted",
+                "score": None,
+                "feedback": feedback,
+            }).eq("id", submission_id).execute()
+            return {
+                "status": "submitted",
+                "score": None,
+                "feedback": feedback,
+            }
+
+        grade = openai_grade(
+            problem=problem,
+            rubric_text=rubric_text,
+            image_bytes=images,
+            exam_file=exam_file
+        )
 
         uncertain = (
             grade["needs_teacher"]
@@ -814,6 +472,17 @@ def auto_grade_submission(submission_id, quiz_key, uploaded_paths):
             "feedback": feedback,
         }).eq("id", submission_id).execute()
 
+        log_ai_event(
+            submission_id=submission_id,
+            student_code=student_code,
+            quiz_key=quiz_key,
+            event_type=(
+                "needs_teacher"
+                if status == "needs_teacher"
+                else "success"
+            ),
+        )
+
         return {
             "status": status,
             "score": score,
@@ -821,7 +490,16 @@ def auto_grade_submission(submission_id, quiz_key, uploaded_paths):
         }
 
     except Exception as e:
-        print("AUTO GRADE ERROR:", e)
+        technical_reason = f"{type(e).__name__}: {e}"
+        print("AUTO GRADE ERROR:", technical_reason, flush=True)
+
+        log_ai_event(
+            submission_id=submission_id,
+            student_code=student_code,
+            quiz_key=quiz_key,
+            event_type="error",
+            error_reason=technical_reason,
+        )
 
         feedback = "העבודה התקבלה, אך הבדיקה האוטומטית נכשלה. המרצה יכול להפעיל בדיקה חוזרת."
 
@@ -1082,15 +760,11 @@ def submit():
         return jsonify(error="חסרים שדות חובה"), 400
 
     try:
-        identity = student_access_identity(code, pin)
-        if not identity:
+        if not student_access_ok(code, pin):
             return jsonify(error="קוד סטודנט או PIN אינם רשומים"), 403
     except Exception as e:
         print("STUDENT ACCESS ERROR:", e)
         return jsonify(error="שגיאה באימות פרטי הסטודנט"), 500
-
-    canonical_code = identity["student_code"]
-    access_pin_hash = identity["pin_hash"]
 
     allowed = {".png", ".jpg", ".jpeg"}
 
@@ -1105,7 +779,8 @@ def submit():
         existing = (
             sb.table("mini_check_submissions")
             .select("id")
-            .eq("pin_hash", access_pin_hash)
+            .eq("student_code", code)
+            .eq("pin_hash", phash(code, pin))
             .eq("quiz_id", quiz_key)
             .limit(1)
             .execute()
@@ -1125,7 +800,7 @@ def submit():
             ext = os.path.splitext(f.filename)[1].lower()
 
             # Keep storage path simple and independent of Hebrew/course names.
-            path = f"{canonical_code}/{sid}/{index:03d}{ext}"
+            path = f"{code}/{sid}/{index:03d}{ext}"
             content = f.read()
 
             sb.storage.from_("mini-check-files").upload(
@@ -1141,14 +816,14 @@ def submit():
 
         sb.table("mini_check_submissions").insert({
             "id": sid,
-            "student_code": canonical_code,
-            "pin_hash": access_pin_hash,
+            "student_code": code,
+            "pin_hash": phash(code, pin),
             "quiz_id": quiz_key,
             "file_path": json.dumps(uploaded_paths, ensure_ascii=False),
             "status": "submitted"
         }).execute()
 
-        # The student page starts AI grading immediately after this response.
+        # The student decides when to start AI grading.
         return jsonify(
             submission_id=sid,
             files=len(uploaded_paths),
@@ -1194,14 +869,11 @@ def student_existing_submission():
         return jsonify(error="חסרים קוד סטודנט או PIN"), 400
 
     try:
-        identity = student_access_identity(code, pin)
-        if not identity:
+        if not student_access_ok(code, pin):
             return jsonify(error="קוד סטודנט או PIN אינם רשומים"), 403
     except Exception as e:
         print("STUDENT ACCESS ERROR:", e)
         return jsonify(error="שגיאה באימות פרטי הסטודנט"), 500
-
-    access_pin_hash = identity["pin_hash"]
 
     quiz_key = make_quiz_key(course_id, group_id, quiz_id)
 
@@ -1217,7 +889,8 @@ def student_existing_submission():
                 "feedback,"
                 "created_at"
             )
-            .eq("pin_hash", access_pin_hash)
+            .eq("student_code", code)
+            .eq("pin_hash", phash(code, pin))
             .eq("quiz_id", quiz_key)
             .order("created_at", desc=True)
             .limit(1)
@@ -1261,8 +934,7 @@ def student_grade():
         return jsonify(error="חסרים פרטים לבדיקה"), 400
 
     try:
-        identity = student_access_identity(code, pin)
-        if not identity:
+        if not student_access_ok(code, pin):
             return jsonify(error="קוד סטודנט או PIN אינם רשומים"), 403
     except Exception as e:
         print("STUDENT ACCESS ERROR:", e)
@@ -1291,11 +963,7 @@ def student_grade():
 
     row = rows[0]
 
-    if (
-        normalize_student_code(row.get("student_code"))
-        != identity["student_code"]
-        or row.get("pin_hash") != identity["pin_hash"]
-    ):
+    if row.get("student_code") != code or row.get("pin_hash") != phash(code, pin):
         return jsonify(error="קוד סטודנט או PIN שגויים"), 403
 
     current_status = row.get("status") or "submitted"
@@ -1367,7 +1035,8 @@ def student_grade():
         grade_result = auto_grade_submission(
             submission_id=submission_id,
             quiz_key=row.get("quiz_id", ""),
-            uploaded_paths=uploaded_paths
+            uploaded_paths=uploaded_paths,
+            student_code=code,
         )
 
         return jsonify(
@@ -1395,14 +1064,6 @@ def student_delete_submission():
     if not submission_id or not code or not pin:
         return jsonify(error="חסרים פרטים למחיקת ההגשה"), 400
 
-    try:
-        identity = student_access_identity(code, pin)
-        if not identity:
-            return jsonify(error="קוד סטודנט או PIN אינם רשומים"), 403
-    except Exception as e:
-        print("STUDENT ACCESS ERROR:", e)
-        return jsonify(error="שגיאה באימות פרטי הסטודנט"), 500
-
     rows = (
         sb.table("mini_check_submissions")
         .select(
@@ -1424,9 +1085,8 @@ def student_delete_submission():
     row = rows[0]
 
     if (
-        normalize_student_code(row.get("student_code"))
-        != identity["student_code"]
-        or row.get("pin_hash") != identity["pin_hash"]
+        row.get("student_code") != code
+        or row.get("pin_hash") != phash(code, pin)
     ):
         return jsonify(error="קוד סטודנט או PIN שגויים"), 403
 
@@ -1482,12 +1142,13 @@ def results():
     pin = d.get("pin", "")
 
     try:
-        identity = student_access_identity(code, pin)
-        if not identity:
+        if not student_access_ok(code, pin):
             return jsonify(error="קוד סטודנט או PIN אינם רשומים"), 403
     except Exception as e:
         print("STUDENT ACCESS ERROR:", e)
         return jsonify(error="שגיאה באימות פרטי הסטודנט"), 500
+
+    p = phash(code, pin)
 
     rows = (
         sb.table("mini_check_submissions")
@@ -1498,7 +1159,8 @@ def results():
             "status,"
             "created_at"
         )
-        .eq("pin_hash", identity["pin_hash"])
+        .eq("student_code", code)
+        .eq("pin_hash", p)
         .order("created_at", desc=True)
         .execute()
         .data
@@ -1520,98 +1182,6 @@ def results():
         })
 
     return jsonify(results=public_rows)
-
-
-# ==========================================================
-# TEACHER – EXPORT GRADES TO EXCEL
-# ==========================================================
-
-@app.post("/teacher/export.xlsx")
-def teacher_export_xlsx():
-    d = request.get_json(force=True)
-    password = str(d.get("teacher_password", "")).strip()
-
-    if not teacher_password_ok(password):
-        return jsonify(error="Invalid teacher password"), 403
-
-    selected_course = str(d.get("course_id", "ALL")).strip() or "ALL"
-    selected_quiz = str(d.get("quiz_id", "ALL")).strip() or "ALL"
-    selected_status = str(d.get("status", "ALL")).strip() or "ALL"
-
-    try:
-        rows = (
-            sb.table("mini_check_submissions")
-            .select(
-                "student_code,"
-                "quiz_id,"
-                "score,"
-                "feedback,"
-                "status,"
-                "created_at"
-            )
-            .order("created_at", desc=True)
-            .execute()
-            .data
-        )
-
-        records = grouped_submission_rows(rows)
-        filtered = []
-
-        for record in records:
-            if (
-                selected_course != "ALL"
-                and record.get("course_id") != selected_course
-            ):
-                continue
-            if (
-                selected_quiz != "ALL"
-                and str(record.get("quiz_id", "")) != selected_quiz
-            ):
-                continue
-            if selected_status == "UNGRADED":
-                if not record.get("has_no_score"):
-                    continue
-            elif (
-                selected_status != "ALL"
-                and record.get("status") != selected_status
-            ):
-                continue
-            filtered.append(record)
-
-        filtered.sort(key=lambda item: (
-            str(item.get("student_code", "")),
-            str(item.get("quiz_id", "")),
-        ))
-
-        workbook = build_grades_xlsx(filtered)
-
-        filename_parts = ["grades"]
-        if selected_course != "ALL":
-            filename_parts.append(selected_course)
-        if selected_quiz != "ALL":
-            filename_parts.append(selected_quiz)
-        filename_parts.append(datetime.now(timezone.utc).date().isoformat())
-        filename = "_".join(
-            re.sub(r"[^A-Za-z0-9_-]+", "-", part).strip("-") or "all"
-            for part in filename_parts
-        ) + ".xlsx"
-
-        response = send_file(
-            workbook,
-            mimetype=(
-                "application/vnd.openxmlformats-officedocument."
-                "spreadsheetml.sheet"
-            ),
-            as_attachment=True,
-            download_name=filename,
-            max_age=0,
-        )
-        response.headers["X-Exported-Rows"] = str(len(filtered))
-        return response
-
-    except Exception as e:
-        print("TEACHER EXCEL EXPORT ERROR:", e, flush=True)
-        return jsonify(error="Excel export failed"), 500
 
 
 # ==========================================================
@@ -1686,6 +1256,83 @@ def submissions():
     return jsonify(submissions=public_rows)
 
 
+@app.post("/teacher/ai-monitoring")
+def teacher_ai_monitoring():
+    d = request.get_json(silent=True) or {}
+    password = str(d.get("teacher_password", "")).strip()
+
+    if not teacher_password_ok(password):
+        return jsonify(error="Invalid teacher password"), 403
+
+    try:
+        day_start, day_end = ai_day_bounds()
+        today_rows = (
+            sb.table("mini_check_ai_events")
+            .select("event_type")
+            .gte("created_at", day_start.isoformat())
+            .lt("created_at", day_end.isoformat())
+            .execute()
+            .data
+        )
+
+        counts = {
+            "started": 0,
+            "success": 0,
+            "needs_teacher": 0,
+            "error": 0,
+            "blocked_limit": 0,
+        }
+        for row in today_rows:
+            event_type = str(row.get("event_type", ""))
+            if event_type in counts:
+                counts[event_type] += 1
+
+        error_rows = (
+            sb.table("mini_check_ai_events")
+            .select(
+                "submission_id,student_code,quiz_id,error_reason,created_at"
+            )
+            .eq("event_type", "error")
+            .order("created_at", desc=True)
+            .limit(40)
+            .execute()
+            .data
+        )
+
+        errors = []
+        for row in error_rows:
+            parts = split_quiz_key(row.get("quiz_id"))
+            errors.append({
+                "submission_id": row.get("submission_id"),
+                "student_code": row.get("student_code") or "",
+                "course_id": parts.get("course_id") or "",
+                "group_id": parts.get("group_id") or "",
+                "quiz_id": parts.get("quiz_id") or "",
+                "error_reason": row.get("error_reason") or "Unknown error",
+                "created_at": row.get("created_at"),
+            })
+
+        started = counts["started"]
+        return jsonify(
+            timezone=AI_LIMIT_TIMEZONE,
+            daily_limit=AI_DAILY_LIMIT,
+            estimated_cost_per_check=AI_ESTIMATED_COST_PER_CHECK,
+            today={
+                **counts,
+                "completed": counts["success"] + counts["needs_teacher"],
+                "remaining": max(0, AI_DAILY_LIMIT - started),
+                "estimated_cost": round(
+                    started * AI_ESTIMATED_COST_PER_CHECK,
+                    2,
+                ),
+            },
+            recent_errors=errors,
+        )
+    except Exception as e:
+        print("AI MONITORING ERROR:", repr(e), flush=True)
+        return jsonify(error="AI monitoring is not ready"), 500
+
+
 @app.post("/teacher/students")
 def teacher_students():
     d = request.get_json(force=True)
@@ -1706,7 +1353,7 @@ def teacher_students():
 
         grouped = {}
         for row in rows:
-            code = normalize_student_code(row.get("student_code"))
+            code = str(row.get("student_code", "")).strip()
             if not code:
                 continue
             item = grouped.setdefault(code, {
@@ -1719,8 +1366,7 @@ def teacher_students():
 
         return jsonify(students=list(grouped.values()))
 
-    raw_code = str(d.get("student_code", "")).strip()
-    code = normalize_student_code(raw_code)
+    code = str(d.get("student_code", "")).strip()
     if not code:
         return jsonify(error="Missing student code"), 400
 
@@ -1729,77 +1375,11 @@ def teacher_students():
         if len(pin) < 4:
             return jsonify(error="PIN must contain at least 4 characters"), 400
 
-        rows = (
-            sb.table("mini_check_student_access")
-            .select("student_code,pin_hash,active")
-            .execute()
-            .data
-        )
-        matching_rows = [
-            row for row in rows
-            if normalize_student_code(row.get("student_code")) == code
-        ]
-
-        if action == "add" and matching_rows:
-            same_pair_rows = [
-                row for row in matching_rows
-                if str(row.get("pin_hash", ""))
-                == phash(str(row.get("student_code", "")).strip(), pin)
-            ]
-            if same_pair_rows:
-                for row in same_pair_rows:
-                    sb.table("mini_check_student_access") \
-                        .update({"active": True}) \
-                        .eq(
-                            "student_code",
-                            str(row.get("student_code", "")).strip()
-                        ) \
-                        .eq("pin_hash", row.get("pin_hash")) \
-                        .execute()
-                return jsonify(ok=True, student_code=code, active=True)
-            return jsonify(
-                error="Student code already exists; use reset PIN"
-            ), 409
-
         if action == "reset_pin":
-            active_hashes = {
-                str(row.get("pin_hash", ""))
-                for row in matching_rows
-                if bool(row.get("active")) and row.get("pin_hash")
-            }
-            if len(active_hashes) > 1:
-                return jsonify(
-                    error=(
-                        "This code has multiple active PINs. "
-                        "Assign a new unique student code first."
-                    )
-                ), 409
-
-            matching_codes = {
-                str(row.get("student_code", "")).strip()
-                for row in matching_rows
-            }
-
-            new_hash = phash(code, pin)
-            old_hashes = {
-                str(row.get("pin_hash", ""))
-                for row in matching_rows
-                if row.get("pin_hash")
-            }
-            for old_hash in old_hashes:
-                sb.table("mini_check_submissions") \
-                    .update({
-                        "student_code": code,
-                        "pin_hash": new_hash,
-                    }) \
-                    .eq("pin_hash", old_hash) \
-                    .execute()
-
-            for stored_code in matching_codes:
-                sb.table("mini_check_student_access") \
-                    .delete() \
-                    .eq("student_code", stored_code) \
-                    .execute()
+            sb.table("mini_check_student_access") \
+                .delete() \
+                .eq("student_code", code) \
+                .execute()
 
         sb.table("mini_check_student_access").upsert({
             "student_code": code,
@@ -1811,26 +1391,14 @@ def teacher_students():
 
     if action == "set_active":
         active = bool(d.get("active"))
-        rows = (
+        result = (
             sb.table("mini_check_student_access")
-            .select("student_code")
+            .update({"active": active})
+            .eq("student_code", code)
             .execute()
-            .data
         )
-        matching_codes = {
-            str(row.get("student_code", "")).strip()
-            for row in rows
-            if normalize_student_code(row.get("student_code")) == code
-        }
-        if not matching_codes:
+        if not result.data:
             return jsonify(error="Student code not found"), 404
-
-        for stored_code in matching_codes:
-            sb.table("mini_check_student_access") \
-                .update({"active": active}) \
-                .eq("student_code", stored_code) \
-                .execute()
-
         return jsonify(ok=True, student_code=code, active=active)
 
     return jsonify(error="Unknown action"), 400
