@@ -175,6 +175,13 @@ button:disabled{cursor:not-allowed;opacity:.62}
   gap:14px;
 }
 
+.work-tools{
+  display:grid;
+  grid-template-columns:1.25fr 1fr .8fr;
+  gap:14px;
+  margin-top:14px;
+}
+
 .actions-row{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:14px}
 #export_excel{background:linear-gradient(135deg,#278645,#50a96a)}
 
@@ -237,6 +244,21 @@ button:disabled{cursor:not-allowed;opacity:.62}
 #works{margin-top:18px}
 #works>.card{border-right:5px solid #b8dfe5}
 #works>.card h3{margin-top:0;font-size:22px}
+#works.works-compact{
+  display:grid!important;
+  grid-template-columns:repeat(2,minmax(0,1fr));
+  gap:13px;
+}
+#works.works-compact>.card{margin:0;padding:17px}
+#works.works-compact .compact-hide{display:none}
+.work-card-head{display:flex;justify-content:space-between;gap:14px;align-items:flex-start}
+.work-card-head h3{margin-bottom:7px}
+.work-card-head p{margin:0}
+.work-meta{display:flex;flex-wrap:wrap;gap:7px 15px;margin:12px 0;color:var(--muted)}
+.work-meta span{white-space:nowrap}
+.work-feedback{padding:10px 12px;background:#f7fbfc;border-radius:11px;overflow-wrap:anywhere}
+.viewer-nav{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:14px 0}
+.viewer-nav button{color:var(--ink);background:#eef5f7;box-shadow:none}
 
 .work{padding:15px;margin-top:12px;border:1px solid var(--line);border-radius:13px;background:#fff}
 
@@ -260,8 +282,9 @@ th{background:#edf7f9;color:#28596c}
   .admin-mascot{width:92px;max-height:115px}
   .admin-mascot-wrap::before{width:100px;height:100px}
   .dashboard-grid{grid-template-columns:1fr}
-  .filters-grid{grid-template-columns:1fr}
+  .filters-grid,.work-tools{grid-template-columns:1fr}
   .monitor-metrics{grid-template-columns:repeat(3,minmax(0,1fr))}
+  #works.works-compact{grid-template-columns:1fr}
 }
 
 @media(max-width:560px){
@@ -347,6 +370,32 @@ th{background:#edf7f9;color:#28596c}
             <option value="needs_teacher">לבדיקת מרצה</option>
             <option value="graded">נבדק</option>
             <option value="error">שגיאה</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="work-tools">
+        <div class="field">
+          <label for="student_search">חיפוש לפי קוד סטודנט</label>
+          <input id="student_search" type="search" placeholder="לדוגמה: MATH-1004">
+        </div>
+
+        <div class="field">
+          <label for="works_sort">מיון העבודות</label>
+          <select id="works_sort">
+            <option value="newest">החדשות ביותר</option>
+            <option value="oldest">הישנות ביותר</option>
+            <option value="student">קוד סטודנט</option>
+            <option value="score_desc">ציון — מהגבוה לנמוך</option>
+            <option value="score_asc">ציון — מהנמוך לגבוה</option>
+          </select>
+        </div>
+
+        <div class="field">
+          <label for="works_view">תצוגה</label>
+          <select id="works_view">
+            <option value="compact">קומפקטית</option>
+            <option value="detailed">מפורטת</option>
           </select>
         </div>
       </div>
@@ -939,6 +988,99 @@ function renderSummary(groups) {
     ).join("");
 }
 
+let currentDisplayedGroups = [];
+let lastListContext = null;
+
+function groupLatestTimestamp(group) {
+  return Math.max(0, ...group.rows.map(row => {
+    const value = Date.parse(row.created_at || "");
+    return Number.isFinite(value) ? value : 0;
+  }));
+}
+
+function groupDateText(group) {
+  const timestamp = groupLatestTimestamp(group);
+  return timestamp
+    ? new Date(timestamp).toLocaleString("he-IL")
+    : "לא ידוע";
+}
+
+function groupNumericScore(group) {
+  const values = group.rows
+    .filter(row => row.score !== null && row.score !== undefined && row.score !== "")
+    .map(row => Number(row.score))
+    .filter(value => Number.isFinite(value));
+  return values.length ? Math.max(...values) : null;
+}
+
+function compareStudentCodes(a, b) {
+  return String(a.student_code || "").localeCompare(
+    String(b.student_code || ""),
+    "he",
+    {numeric:true, sensitivity:"base"}
+  );
+}
+
+function applyWorkTools() {
+  const works = document.getElementById("works");
+  const search = document.getElementById("student_search").value.trim().toLowerCase();
+  const sort = document.getElementById("works_sort").value;
+  const view = document.getElementById("works_view").value;
+  const cards = Array.from(works.children)
+    .filter(element => element.classList.contains("card") && element._groupData);
+
+  const visibleCards = cards.filter(card =>
+    !search || String(card._groupData.student_code || "").toLowerCase().includes(search)
+  );
+
+  visibleCards.sort((cardA, cardB) => {
+    const a = cardA._groupData;
+    const b = cardB._groupData;
+
+    if (sort === "oldest") {
+      return groupLatestTimestamp(a) - groupLatestTimestamp(b) || compareStudentCodes(a, b);
+    }
+    if (sort === "student") {
+      return compareStudentCodes(a, b);
+    }
+    if (sort === "score_desc" || sort === "score_asc") {
+      const scoreA = groupNumericScore(a);
+      const scoreB = groupNumericScore(b);
+      if (scoreA === null && scoreB !== null) return 1;
+      if (scoreA !== null && scoreB === null) return -1;
+      if (scoreA !== null && scoreB !== null && scoreA !== scoreB) {
+        return sort === "score_desc" ? scoreB - scoreA : scoreA - scoreB;
+      }
+      return compareStudentCodes(a, b);
+    }
+    return groupLatestTimestamp(b) - groupLatestTimestamp(a) || compareStudentCodes(a, b);
+  });
+
+  cards.forEach(card => { card.style.display = "none"; });
+  visibleCards.forEach(card => {
+    card.style.display = "block";
+    works.appendChild(card);
+  });
+
+  works.classList.toggle("works-compact", view === "compact");
+  currentDisplayedGroups = visibleCards.map(card => card._groupData);
+  renderSummary(currentDisplayedGroups);
+
+  if (lastListContext) {
+    const status = document.getElementById("status");
+    status.className = currentDisplayedGroups.length ? "success" : "muted";
+    status.textContent = currentDisplayedGroups.length
+      ? `מוצגות ${currentDisplayedGroups.length} עבודות מתוך ${lastListContext.filteredCount}.`
+      : (search
+          ? "לא נמצאו עבודות המתאימות לחיפוש."
+          : "לא נמצאו עבודות במסננים שנבחרו.");
+  }
+}
+
+document.getElementById("student_search").addEventListener("input", applyWorkTools);
+document.getElementById("works_sort").addEventListener("change", applyWorkTools);
+document.getElementById("works_view").addEventListener("change", applyWorkTools);
+
 
 function groupFeedbackText(group) {
 
@@ -1013,6 +1155,28 @@ async function getSignedUrlsForGroup(
   return [
     ...new Set(allUrls)
   ];
+}
+
+async function openSubmissionGroup(group, password, triggerButton = null) {
+  const originalText = triggerButton?.textContent || "";
+
+  try {
+    if (triggerButton) {
+      triggerButton.disabled = true;
+      triggerButton.textContent = "פותח...";
+    }
+
+    const urls = await getSignedUrlsForGroup(group, password);
+    showSubmission(urls, group);
+  } catch (error) {
+    console.error(error);
+    alert("שגיאה בפתיחת העבודה");
+  } finally {
+    if (triggerButton) {
+      triggerButton.disabled = false;
+      triggerButton.textContent = originalText;
+    }
+  }
 }
 
 document.getElementById("export_excel").onclick = async () => {
@@ -1190,7 +1354,10 @@ document.getElementById("load").onclick = async () => {
        (selectedStatus === "UNGRADED" ? hasNoScore(group) : groupStatus(group) === selectedStatus))
     );
 
-    renderSummary(visibleGroups);
+    lastListContext = {
+      filteredCount: visibleGroups.length,
+      rowCount: rows.length
+    };
 
     status.className =
       "success";
@@ -1215,6 +1382,8 @@ document.getElementById("load").onclick = async () => {
 
       div.className =
         "card";
+
+      div._groupData = group;
 
       const sourceQuizIds =
         [
@@ -1245,46 +1414,32 @@ document.getElementById("load").onclick = async () => {
         : "";
 
       div.innerHTML = `
-
-        <h3>
-          ${escapeHtml(courseLabel(group.course_id))} —
-          תרגול ${escapeHtml(group.quiz_id || "")}
-        </h3>
-
-        <p>
-          <strong>קבוצה:</strong>
-          ${escapeHtml(group.group_id || "")}
-        </p>
-
-        <p>
-          <strong>קוד סטודנט:</strong>
-          ${escapeHtml(group.student_code || "")}
-        </p>
-
-        <p>
-          <strong>מספר הגשות שאוחדו:</strong>
-          ${group.rows.length}
-        </p>
-
-        ${historicalNote}
-
-        <p>
-          <strong>ציון:</strong>
-          ${escapeHtml(groupScoreText(group))}
-        </p>
-
-        <p>
-          <strong>סטטוס:</strong>
+        <div class="work-card-head">
+          <div>
+            <h3>
+              ${escapeHtml(courseLabel(group.course_id))} —
+              תרגול ${escapeHtml(group.quiz_id || "")}
+            </h3>
+            <p><strong>קוד סטודנט:</strong> ${escapeHtml(group.student_code || "")}</p>
+          </div>
           <span class="status-badge status-${groupStatus(group)}">
             ${escapeHtml(statusLabel(groupStatus(group)))}
           </span>
-        </p>
+        </div>
 
-        <p>
+        <div class="work-meta">
+          <span><strong>ציון:</strong> ${escapeHtml(groupScoreText(group))}</span>
+          <span><strong>תאריך:</strong> ${escapeHtml(groupDateText(group))}</span>
+          <span class="compact-hide"><strong>קבוצה:</strong> ${escapeHtml(group.group_id || "")}</span>
+          <span class="compact-hide"><strong>הגשות שאוחדו:</strong> ${group.rows.length}</span>
+        </div>
+
+        <div class="compact-hide">${historicalNote}</div>
+
+        <p class="work-feedback compact-hide">
           <strong>הערה:</strong>
-          ${escapeHtml(groupFeedbackText(group))}
+          ${escapeHtml(groupFeedbackText(group) || "אין הערה")}
         </p>
-
       `;
 
 
@@ -1297,51 +1452,7 @@ document.getElementById("load").onclick = async () => {
         "פתיחת העבודה המאוחדת";
 
 
-      openButton.onclick =
-        async () => {
-
-          try {
-
-            openButton.disabled =
-              true;
-
-            openButton.textContent =
-              "פותח...";
-
-            const urls =
-              await getSignedUrlsForGroup(
-                group,
-                password
-              );
-
-            showSubmission(
-              urls,
-              group
-            );
-
-          }
-
-          catch (e) {
-
-            console.error(e);
-
-            alert(
-              "שגיאה בפתיחת העבודה"
-            );
-
-          }
-
-          finally {
-
-            openButton.disabled =
-              false;
-
-            openButton.textContent =
-              "פתיחת העבודה המאוחדת";
-
-          }
-
-        };
+      openButton.onclick = () => openSubmissionGroup(group, password, openButton);
 
 
       div.appendChild(
@@ -1353,6 +1464,8 @@ document.getElementById("load").onclick = async () => {
       );
 
     });
+
+    applyWorkTools();
 
   }
 
@@ -1376,6 +1489,14 @@ function showSubmission(
   urls,
   group
 ) {
+
+  const currentIndex = currentDisplayedGroups.indexOf(group);
+  const previousGroup = currentIndex > 0
+    ? currentDisplayedGroups[currentIndex - 1]
+    : null;
+  const nextGroup = currentIndex >= 0 && currentIndex < currentDisplayedGroups.length - 1
+    ? currentDisplayedGroups[currentIndex + 1]
+    : null;
 
   const oldViewer =
     document.getElementById(
@@ -1454,6 +1575,15 @@ function showSubmission(
       <strong>מספר תמונות:</strong>
       ${urls.length}
     </p>
+
+    <div class="viewer-nav">
+      <button type="button" id="previousSubmission" ${previousGroup ? "" : "disabled"}>
+        העבודה הקודמת
+      </button>
+      <button type="button" id="nextSubmission" ${nextGroup ? "" : "disabled"}>
+        העבודה הבאה
+      </button>
+    </div>
 
     <div>
       ${pagesHtml}
@@ -1548,6 +1678,20 @@ function showSubmission(
     viewer.querySelector(
       "#closeSubmission"
     );
+
+  const teacherPassword = document.getElementById("teacher_password").value.trim();
+
+  viewer.querySelector("#previousSubmission").onclick = async () => {
+    if (!previousGroup) return;
+    viewer.remove();
+    await openSubmissionGroup(previousGroup, teacherPassword);
+  };
+
+  viewer.querySelector("#nextSubmission").onclick = async () => {
+    if (!nextGroup) return;
+    viewer.remove();
+    await openSubmissionGroup(nextGroup, teacherPassword);
+  };
 
   let aiCheckInProgress = false;
   let aiCheckCompleted = false;
