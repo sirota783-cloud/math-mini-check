@@ -1021,16 +1021,25 @@ function compareStudentCodes(a, b) {
   );
 }
 
+function normalizeStudentSearchValue(value) {
+  return String(value || "")
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, "");
+}
+
 function applyWorkTools() {
   const works = document.getElementById("works");
-  const search = document.getElementById("student_search").value.trim().toLowerCase();
+  const search = normalizeStudentSearchValue(
+    document.getElementById("student_search").value
+  );
   const sort = document.getElementById("works_sort").value;
   const view = document.getElementById("works_view").value;
   const cards = Array.from(works.children)
     .filter(element => element.classList.contains("card") && element._groupData);
 
   const visibleCards = cards.filter(card =>
-    !search || String(card._groupData.student_code || "").toLowerCase().includes(search)
+    !search || normalizeStudentSearchValue(card._groupData.student_code).includes(search)
   );
 
   visibleCards.sort((cardA, cardB) => {
