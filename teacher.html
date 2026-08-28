@@ -210,6 +210,30 @@ button:disabled{cursor:not-allowed;opacity:.62}
 .success{color:var(--success);font-weight:800}
 .muted{color:var(--muted)}
 
+.monitor-card{border-top:5px solid var(--sun)}
+.monitor-metrics{
+  display:grid;
+  grid-template-columns:repeat(6,minmax(0,1fr));
+  gap:10px;
+  margin:16px 0;
+}
+.monitor-metric{
+  min-height:92px;
+  display:grid;
+  align-content:center;
+  gap:5px;
+  padding:13px;
+  text-align:center;
+  background:#f7fbfc;
+  border:1px solid var(--line);
+  border-radius:15px;
+}
+.monitor-metric strong{font-size:25px;color:var(--primary-dark)}
+.monitor-metric span{color:var(--muted);font-size:14px;font-weight:800}
+.monitor-note{padding:11px 14px;background:#fff8d9;border-radius:12px;color:#66520b}
+#refresh_ai_monitoring{width:auto;min-width:120px;background:#68869b;box-shadow:none}
+#ai_errors_table td{vertical-align:top;overflow-wrap:anywhere}
+
 #works{margin-top:18px}
 #works>.card{border-right:5px solid #b8dfe5}
 #works>.card h3{margin-top:0;font-size:22px}
@@ -237,6 +261,7 @@ th{background:#edf7f9;color:#28596c}
   .admin-mascot-wrap::before{width:100px;height:100px}
   .dashboard-grid{grid-template-columns:1fr}
   .filters-grid{grid-template-columns:1fr}
+  .monitor-metrics{grid-template-columns:repeat(3,minmax(0,1fr))}
 }
 
 @media(max-width:560px){
@@ -245,6 +270,7 @@ th{background:#edf7f9;color:#28596c}
   .admin-mascot-wrap{order:2}
   .admin-copy{order:1}
   .login-row,.student-form,.button-pair,.actions-row{grid-template-columns:1fr}
+  .monitor-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}
   .section-head{flex-direction:column}
   #teacher_logout{width:100%}
 }
@@ -336,6 +362,23 @@ th{background:#edf7f9;color:#28596c}
     </div>
   </section>
 
+  <section class="card monitor-card" id="ai_monitoring_card" style="display:none">
+    <div class="section-head">
+      <div>
+        <h2>בקרת AI ויומן שגיאות</h2>
+        <p>מעקב אחרי הבדיקות האוטומטיות והגבלת ההוצאה היומית.</p>
+      </div>
+      <button id="refresh_ai_monitoring">רענון</button>
+    </div>
+
+    <div id="ai_monitoring_metrics" class="monitor-metrics"></div>
+    <p id="ai_monitoring_note" class="monitor-note"></p>
+    <p id="ai_monitoring_status"></p>
+
+    <h3>שגיאות טכניות אחרונות</h3>
+    <div id="ai_errors_log"></div>
+  </section>
+
   <div class="dashboard-grid">
     <section class="card" id="students_card" style="display:none">
       <div class="section-head">
@@ -413,6 +456,9 @@ const STUDENTS_ENDPOINT =
 const EXCEL_EXPORT_ENDPOINT =
   "https://math-mini-check.onrender.com/teacher/export.xlsx";
 
+const AI_MONITORING_ENDPOINT =
+  "https://math-mini-check.onrender.com/teacher/ai-monitoring";
+
 const TEACHER_SESSION_KEY =
   "math_mini_check_teacher_session";
 
@@ -420,23 +466,28 @@ function showTeacherPanel(password) {
   document.getElementById("teacher_password").value = password;
   document.getElementById("teacher_password").style.display = "none";
   document.getElementById("teacher_login").style.display = "none";
+  document.querySelector(".login-row").style.display = "none";
   document.getElementById("teacher_logout").style.display = "block";
   document.getElementById("teacher_controls").style.display = "block";
   document.getElementById("protected_card").style.display = "block";
   document.getElementById("students_card").style.display = "block";
+  document.getElementById("ai_monitoring_card").style.display = "block";
   document.getElementById("works").style.display = "block";
   document.getElementById("login_status").className = "success";
   document.getElementById("login_status").textContent = "הכניסה הצליחה";
+  loadAiMonitoring();
 }
 
 function hideTeacherPanel() {
   document.getElementById("teacher_password").value = "";
   document.getElementById("teacher_password").style.display = "block";
   document.getElementById("teacher_login").style.display = "block";
+  document.querySelector(".login-row").style.display = "grid";
   document.getElementById("teacher_logout").style.display = "none";
   document.getElementById("teacher_controls").style.display = "none";
   document.getElementById("protected_card").style.display = "none";
   document.getElementById("students_card").style.display = "none";
+  document.getElementById("ai_monitoring_card").style.display = "none";
   document.getElementById("works").style.display = "none";
   document.getElementById("works").innerHTML = "";
   document.getElementById("login_status").textContent = "";
@@ -607,6 +658,96 @@ async function saveStudent(action) {
 
 document.getElementById("add_student").onclick = () => saveStudent("add");
 document.getElementById("reset_student_pin").onclick = () => saveStudent("reset_pin");
+
+
+async function loadAiMonitoring() {
+  const password = document.getElementById("teacher_password").value.trim();
+  const status = document.getElementById("ai_monitoring_status");
+  const metrics = document.getElementById("ai_monitoring_metrics");
+  const note = document.getElementById("ai_monitoring_note");
+  const errorsLog = document.getElementById("ai_errors_log");
+  const button = document.getElementById("refresh_ai_monitoring");
+
+  if (!password) return;
+
+  button.disabled = true;
+  status.className = "";
+  status.textContent = "טוען נתוני AI...";
+
+  try {
+    const response = await fetch(AI_MONITORING_ENDPOINT, {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({teacher_password: password})
+    });
+
+    let data = {};
+    try { data = await response.json(); } catch (_) {}
+    if (!response.ok) throw new Error(data.error || "Monitoring failed");
+
+    const today = data.today || {};
+    const metricItems = [
+      [today.started ?? 0, "בדיקות היום"],
+      [today.completed ?? 0, "הסתיימו"],
+      [today.needs_teacher ?? 0, "לבדיקת מרצה"],
+      [today.error ?? 0, "שגיאות"],
+      [today.remaining ?? 0, "נותרו היום"],
+      [`$${Number(today.estimated_cost || 0).toFixed(2)}`, "עלות משוערת"]
+    ];
+
+    metrics.innerHTML = metricItems.map(([value, label]) =>
+      `<div class="monitor-metric"><strong>${escapeHtml(value)}</strong>` +
+      `<span>${escapeHtml(label)}</span></div>`
+    ).join("");
+
+    note.textContent =
+      `המגבלה היומית: ${data.daily_limit ?? 60} בדיקות. ` +
+      `נחסמו היום: ${today.blocked_limit ?? 0}. ` +
+      "העלות המוצגת היא הערכה בלבד.";
+
+    const errors = Array.isArray(data.recent_errors)
+      ? data.recent_errors
+      : [];
+
+    if (errors.length === 0) {
+      errorsLog.innerHTML = '<p class="success">לא נרשמו שגיאות טכניות.</p>';
+    } else {
+      const rows = errors.map(item => {
+        const when = item.created_at
+          ? new Date(item.created_at).toLocaleString("he-IL")
+          : "";
+        const exercise = [
+          item.course_id || "",
+          item.quiz_id ? `תרגול ${item.quiz_id}` : ""
+        ].filter(Boolean).join(" — ");
+        return `<tr>` +
+          `<td>${escapeHtml(when)}</td>` +
+          `<td>${escapeHtml(item.student_code || "")}</td>` +
+          `<td>${escapeHtml(exercise)}</td>` +
+          `<td dir="ltr">${escapeHtml(item.error_reason || "")}</td>` +
+          `</tr>`;
+      }).join("");
+      errorsLog.innerHTML =
+        `<table id="ai_errors_table"><thead><tr>` +
+        `<th>תאריך</th><th>קוד סטודנט</th><th>תרגול</th><th>סיבת השגיאה</th>` +
+        `</tr></thead><tbody>${rows}</tbody></table>`;
+    }
+
+    status.className = "success";
+    status.textContent = "נתוני AI עודכנו.";
+  } catch (error) {
+    console.error(error);
+    metrics.innerHTML = "";
+    note.textContent = "";
+    errorsLog.innerHTML = "";
+    status.className = "error";
+    status.textContent = "יומן ה-AI עדיין לא מוכן. יש להפעיל תחילה את עדכון Supabase.";
+  } finally {
+    button.disabled = false;
+  }
+}
+
+document.getElementById("refresh_ai_monitoring").onclick = loadAiMonitoring;
 
 
 const COURSE_LABELS = {
