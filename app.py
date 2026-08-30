@@ -5,6 +5,8 @@ import json
 import base64
 import urllib.request
 import urllib.error
+from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 from flask import Flask, request, jsonify, render_template_string
 from flask_cors import CORS
@@ -23,6 +25,15 @@ TEACHER_KEY = os.environ["TEACHER_KEY"]
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "").strip()
 OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-5").strip()
 AUTO_GRADE_CONFIDENCE = float(os.environ.get("AUTO_GRADE_CONFIDENCE", "0.75"))
+AI_DAILY_LIMIT = max(1, int(os.environ.get("AI_DAILY_LIMIT", "60")))
+AI_ESTIMATED_COST_PER_CHECK = max(
+    0.0,
+    float(os.environ.get("AI_ESTIMATED_COST_PER_CHECK", "0.27"))
+)
+AI_LIMIT_TIMEZONE = os.environ.get(
+    "AI_LIMIT_TIMEZONE",
+    "Asia/Jerusalem"
+).strip() or "Asia/Jerusalem"
 
 
 def phash(code, pin):
@@ -36,6 +47,34 @@ def teacher_ok():
         request.headers.get("X-Teacher-Key", "")
         == TEACHER_KEY
     )
+
+
+def student_access_ok(code, pin):
+    """Return True only for an active, registered code/PIN pair."""
+    rows = (
+        sb.table("mini_check_student_access")
+        .select("student_code")
+        .eq("student_code", code)
+        .eq("pin_hash", phash(code, pin))
+        .eq("active", True)
+        .limit(1)
+        .execute()
+        .data
+    )
+    return bool(rows)
+
+
+def teacher_password_ok(password):
+    if not password:
+        return False
+    try:
+        sb.rpc(
+            "get_teacher_submissions",
+            {"p_teacher_password": password}
+        ).execute()
+        return True
+    except Exception:
+        return False
 
 
 def clean_part(value, default):
@@ -72,6 +111,62 @@ def split_quiz_key(value):
         "group_id": "",
         "quiz_id": value,
     }
+
+
+def ai_limit_timezone():
+    try:
+        return ZoneInfo(AI_LIMIT_TIMEZONE)
+    except Exception:
+        return timezone.utc
+
+
+def ai_day_bounds(now=None):
+    tz = ai_limit_timezone()
+    local_now = now.astimezone(tz) if now else datetime.now(tz)
+    start = local_now.replace(hour=0, minute=0, second=0, microsecond=0)
+    return start, start + timedelta(days=1)
+
+
+def log_ai_event(
+    submission_id,
+    student_code,
+    quiz_key,
+    event_type,
+    error_reason="",
+):
+    """Best-effort audit event; logging must never erase a valid grade."""
+    try:
+        sb.table("mini_check_ai_events").insert({
+            "submission_id": submission_id,
+            "student_code": str(student_code or "").strip(),
+            "quiz_id": str(quiz_key or "").strip(),
+            "event_type": str(event_type or "").strip(),
+            "error_reason": str(error_reason or "").strip()[:2000] or None,
+        }).execute()
+    except Exception as event_error:
+        print("AI EVENT LOG ERROR:", repr(event_error), flush=True)
+
+
+def claim_student_ai_slot(submission_id, student_code, quiz_key):
+    """Atomically reserve one place in today's automatic-AI allowance."""
+    day_start, day_end = ai_day_bounds()
+    result = sb.rpc(
+        "mini_check_claim_ai_slot",
+        {
+            "p_submission_id": submission_id,
+            "p_student_code": str(student_code or "").strip(),
+            "p_quiz_id": str(quiz_key or "").strip(),
+            "p_daily_limit": AI_DAILY_LIMIT,
+            "p_day_start": day_start.isoformat(),
+            "p_day_end": day_end.isoformat(),
+        },
+    ).execute()
+    value = result.data
+    if isinstance(value, list):
+        value = value[0] if value else False
+    if isinstance(value, dict):
+        value = next(iter(value.values()), False)
+    return value is True or str(value).lower() == "true"
 
 
 def safe_json_from_text(text):
@@ -131,11 +226,16 @@ Return ONLY one JSON object with these keys:
 score: numeric score from 0 to 100,
 feedback: short feedback for the student in Hebrew,
 confidence: number from 0 to 1,
-needs_teacher: true or false.
+needs_teacher: true or false,
+teacher_review_reason: a short, specific explanation in Hebrew when
+needs_teacher is true; otherwise an empty string.
 
 Set needs_teacher=true if handwriting is unclear, pages seem missing,
 the correspondence between answers and questions is ambiguous,
 or you are not sufficiently confident.
+When needs_teacher=true, never leave teacher_review_reason empty. State exactly
+which question, handwriting passage, missing page, or ambiguity the teacher
+should inspect.
 """
 
     content = [
@@ -208,6 +308,9 @@ or you are not sufficiently confident.
     feedback = str(result.get("feedback", "")).strip()
     confidence = float(result.get("confidence", 0))
     needs_teacher = bool(result.get("needs_teacher", False))
+    teacher_review_reason = str(
+        result.get("teacher_review_reason", "")
+    ).strip()
 
     if score is not None:
         score = float(score)
@@ -219,6 +322,7 @@ or you are not sufficiently confident.
         "feedback": feedback,
         "confidence": confidence,
         "needs_teacher": needs_teacher,
+        "teacher_review_reason": teacher_review_reason,
     }
 def load_exam_file(quiz_key):
     """
@@ -256,7 +360,12 @@ def load_exam_file(quiz_key):
     print("EXAM FILE NOT FOUND FOR:", quiz_key, flush=True)
     return None
     
-def auto_grade_submission(submission_id, quiz_key, uploaded_paths):
+def auto_grade_submission(
+    submission_id,
+    quiz_key,
+    uploaded_paths,
+    student_code="",
+):
     """
     Returns the final public status and score.
     Any failure sends the work to teacher review instead of losing it.
@@ -321,6 +430,26 @@ def auto_grade_submission(submission_id, quiz_key, uploaded_paths):
 
             images.append((raw, mime))
 
+        if not claim_student_ai_slot(
+            submission_id=submission_id,
+            student_code=student_code,
+            quiz_key=quiz_key,
+        ):
+            feedback = (
+                "העבודה נשמרה. המכסה היומית של בדיקות AI הסתיימה. "
+                "המרצה יוכל לבדוק את העבודה או להפעיל בדיקה בהמשך."
+            )
+            sb.table("mini_check_submissions").update({
+                "status": "submitted",
+                "score": None,
+                "feedback": feedback,
+            }).eq("id", submission_id).execute()
+            return {
+                "status": "submitted",
+                "score": None,
+                "feedback": feedback,
+            }
+
         grade = openai_grade(
             problem=problem,
             rubric_text=rubric_text,
@@ -337,9 +466,33 @@ def auto_grade_submission(submission_id, quiz_key, uploaded_paths):
         if uncertain:
             status = "needs_teacher"
             score = grade["score"]
-            feedback = (
+            review_reasons = []
+
+            if grade["teacher_review_reason"]:
+                review_reasons.append(grade["teacher_review_reason"])
+
+            if grade["confidence"] < AUTO_GRADE_CONFIDENCE:
+                review_reasons.append(
+                    "רמת הביטחון של הבדיקה האוטומטית נמוכה "
+                    f"({grade['confidence']:.2f})."
+                )
+
+            if grade["score"] is None:
+                review_reasons.append(
+                    "הבדיקה האוטומטית לא החזירה ציון."
+                )
+
+            review_reason = " ".join(dict.fromkeys(review_reasons)).strip()
+            if not review_reason:
+                review_reason = "נדרשת הכרעה מקצועית של המרצה."
+
+            student_feedback = (
                 grade["feedback"]
                 or "העבודה התקבלה ונדרשת בדיקת מרצה."
+            )
+            feedback = (
+                f"{student_feedback}\n\n"
+                f"סיבת העברה לבדיקת מרצה: {review_reason}"
             )
         else:
             status = "graded"
@@ -352,6 +505,17 @@ def auto_grade_submission(submission_id, quiz_key, uploaded_paths):
             "feedback": feedback,
         }).eq("id", submission_id).execute()
 
+        log_ai_event(
+            submission_id=submission_id,
+            student_code=student_code,
+            quiz_key=quiz_key,
+            event_type=(
+                "needs_teacher"
+                if status == "needs_teacher"
+                else "success"
+            ),
+        )
+
         return {
             "status": status,
             "score": score,
@@ -359,7 +523,16 @@ def auto_grade_submission(submission_id, quiz_key, uploaded_paths):
         }
 
     except Exception as e:
-        print("AUTO GRADE ERROR:", e)
+        technical_reason = f"{type(e).__name__}: {e}"
+        print("AUTO GRADE ERROR:", technical_reason, flush=True)
+
+        log_ai_event(
+            submission_id=submission_id,
+            student_code=student_code,
+            quiz_key=quiz_key,
+            event_type="error",
+            error_reason=technical_reason,
+        )
 
         feedback = "העבודה התקבלה, אך הבדיקה האוטומטית נכשלה. המרצה יכול להפעיל בדיקה חוזרת."
 
@@ -619,6 +792,13 @@ def submit():
     if not code or not pin or not quiz_id or not files:
         return jsonify(error="חסרים שדות חובה"), 400
 
+    try:
+        if not student_access_ok(code, pin):
+            return jsonify(error="קוד סטודנט או PIN אינם רשומים"), 403
+    except Exception as e:
+        print("STUDENT ACCESS ERROR:", e)
+        return jsonify(error="שגיאה באימות פרטי הסטודנט"), 500
+
     allowed = {".png", ".jpg", ".jpeg"}
 
     for f in files:
@@ -627,6 +807,23 @@ def submit():
             return jsonify(error="ניתן להעלות רק קבצי PNG או JPG"), 400
 
     quiz_key = make_quiz_key(course_id, group_id, quiz_id)
+
+    try:
+        existing = (
+            sb.table("mini_check_submissions")
+            .select("id")
+            .eq("student_code", code)
+            .eq("pin_hash", phash(code, pin))
+            .eq("quiz_id", quiz_key)
+            .limit(1)
+            .execute()
+            .data
+        )
+        if existing:
+            return jsonify(error="העבודה הזאת כבר הוגשה"), 409
+    except Exception as e:
+        print("DUPLICATE CHECK ERROR:", e)
+        return jsonify(error="שגיאה בבדיקת הגשה קיימת"), 500
 
     sid = str(uuid.uuid4())
     uploaded_paths = []
@@ -668,7 +865,7 @@ def submit():
             quiz_id=quiz_id,
             status="submitted",
             score=None,
-            feedback="העבודה התקבלה. ניתן להתחיל בדיקת AI."
+            feedback="העבודה התקבלה. הבדיקה האוטומטית מתחילה."
         )
 
     except Exception as e:
@@ -703,6 +900,13 @@ def student_existing_submission():
 
     if not code or not pin:
         return jsonify(error="חסרים קוד סטודנט או PIN"), 400
+
+    try:
+        if not student_access_ok(code, pin):
+            return jsonify(error="קוד סטודנט או PIN אינם רשומים"), 403
+    except Exception as e:
+        print("STUDENT ACCESS ERROR:", e)
+        return jsonify(error="שגיאה באימות פרטי הסטודנט"), 500
 
     quiz_key = make_quiz_key(course_id, group_id, quiz_id)
 
@@ -761,6 +965,13 @@ def student_grade():
 
     if not submission_id or not code or not pin:
         return jsonify(error="חסרים פרטים לבדיקה"), 400
+
+    try:
+        if not student_access_ok(code, pin):
+            return jsonify(error="קוד סטודנט או PIN אינם רשומים"), 403
+    except Exception as e:
+        print("STUDENT ACCESS ERROR:", e)
+        return jsonify(error="שגיאה באימות פרטי הסטודנט"), 500
 
     rows = (
         sb.table("mini_check_submissions")
@@ -857,7 +1068,8 @@ def student_grade():
         grade_result = auto_grade_submission(
             submission_id=submission_id,
             quiz_key=row.get("quiz_id", ""),
-            uploaded_paths=uploaded_paths
+            uploaded_paths=uploaded_paths,
+            student_code=code,
         )
 
         return jsonify(
@@ -960,7 +1172,16 @@ def results():
     d = request.get_json(force=True)
 
     code = d.get("student_code", "").strip()
-    p = phash(code, d.get("pin", ""))
+    pin = d.get("pin", "")
+
+    try:
+        if not student_access_ok(code, pin):
+            return jsonify(error="קוד סטודנט או PIN אינם רשומים"), 403
+    except Exception as e:
+        print("STUDENT ACCESS ERROR:", e)
+        return jsonify(error="שגיאה באימות פרטי הסטודנט"), 500
+
+    p = phash(code, pin)
 
     rows = (
         sb.table("mini_check_submissions")
@@ -1066,6 +1287,154 @@ def submissions():
         public_rows.append(item)
 
     return jsonify(submissions=public_rows)
+
+
+@app.post("/teacher/ai-monitoring")
+def teacher_ai_monitoring():
+    d = request.get_json(silent=True) or {}
+    password = str(d.get("teacher_password", "")).strip()
+
+    if not teacher_password_ok(password):
+        return jsonify(error="Invalid teacher password"), 403
+
+    try:
+        day_start, day_end = ai_day_bounds()
+        today_rows = (
+            sb.table("mini_check_ai_events")
+            .select("event_type")
+            .gte("created_at", day_start.isoformat())
+            .lt("created_at", day_end.isoformat())
+            .execute()
+            .data
+        )
+
+        counts = {
+            "started": 0,
+            "success": 0,
+            "needs_teacher": 0,
+            "error": 0,
+            "blocked_limit": 0,
+        }
+        for row in today_rows:
+            event_type = str(row.get("event_type", ""))
+            if event_type in counts:
+                counts[event_type] += 1
+
+        error_rows = (
+            sb.table("mini_check_ai_events")
+            .select(
+                "submission_id,student_code,quiz_id,error_reason,created_at"
+            )
+            .eq("event_type", "error")
+            .order("created_at", desc=True)
+            .limit(40)
+            .execute()
+            .data
+        )
+
+        errors = []
+        for row in error_rows:
+            parts = split_quiz_key(row.get("quiz_id"))
+            errors.append({
+                "submission_id": row.get("submission_id"),
+                "student_code": row.get("student_code") or "",
+                "course_id": parts.get("course_id") or "",
+                "group_id": parts.get("group_id") or "",
+                "quiz_id": parts.get("quiz_id") or "",
+                "error_reason": row.get("error_reason") or "Unknown error",
+                "created_at": row.get("created_at"),
+            })
+
+        started = counts["started"]
+        return jsonify(
+            timezone=AI_LIMIT_TIMEZONE,
+            daily_limit=AI_DAILY_LIMIT,
+            estimated_cost_per_check=AI_ESTIMATED_COST_PER_CHECK,
+            today={
+                **counts,
+                "completed": counts["success"] + counts["needs_teacher"],
+                "remaining": max(0, AI_DAILY_LIMIT - started),
+                "estimated_cost": round(
+                    started * AI_ESTIMATED_COST_PER_CHECK,
+                    2,
+                ),
+            },
+            recent_errors=errors,
+        )
+    except Exception as e:
+        print("AI MONITORING ERROR:", repr(e), flush=True)
+        return jsonify(error="AI monitoring is not ready"), 500
+
+
+@app.post("/teacher/students")
+def teacher_students():
+    d = request.get_json(force=True)
+    password = str(d.get("teacher_password", "")).strip()
+    action = str(d.get("action", "list")).strip().lower()
+
+    if not teacher_password_ok(password):
+        return jsonify(error="Invalid teacher password"), 403
+
+    if action == "list":
+        rows = (
+            sb.table("mini_check_student_access")
+            .select("student_code,active,created_at")
+            .order("student_code")
+            .execute()
+            .data
+        )
+
+        grouped = {}
+        for row in rows:
+            code = str(row.get("student_code", "")).strip()
+            if not code:
+                continue
+            item = grouped.setdefault(code, {
+                "student_code": code,
+                "active": False,
+                "registered_pairs": 0,
+            })
+            item["registered_pairs"] += 1
+            item["active"] = item["active"] or bool(row.get("active"))
+
+        return jsonify(students=list(grouped.values()))
+
+    code = str(d.get("student_code", "")).strip()
+    if not code:
+        return jsonify(error="Missing student code"), 400
+
+    if action in {"add", "reset_pin"}:
+        pin = str(d.get("pin", "")).strip()
+        if len(pin) < 4:
+            return jsonify(error="PIN must contain at least 4 characters"), 400
+
+        if action == "reset_pin":
+            sb.table("mini_check_student_access") \
+                .delete() \
+                .eq("student_code", code) \
+                .execute()
+
+        sb.table("mini_check_student_access").upsert({
+            "student_code": code,
+            "pin_hash": phash(code, pin),
+            "active": True,
+        }, on_conflict="student_code,pin_hash").execute()
+
+        return jsonify(ok=True, student_code=code, active=True)
+
+    if action == "set_active":
+        active = bool(d.get("active"))
+        result = (
+            sb.table("mini_check_student_access")
+            .update({"active": active})
+            .eq("student_code", code)
+            .execute()
+        )
+        if not result.data:
+            return jsonify(error="Student code not found"), 404
+        return jsonify(ok=True, student_code=code, active=active)
+
+    return jsonify(error="Unknown action"), 400
 
 
 @app.post("/teacher/file-url")
