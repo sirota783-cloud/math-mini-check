@@ -1113,6 +1113,92 @@ function groupFeedbackText(group) {
 }
 
 
+const ERROR_MARKERS_STORAGE_PREFIX =
+  "math-mini-check:error-markers:v1:";
+
+
+function errorMarkersStorageKey(group) {
+
+  const stableParts = [
+    group.student_code,
+    group.quiz_key || group.quiz_id,
+    group.course_id,
+    group.group_id
+  ].map(value => String(value ?? "").trim());
+
+  return ERROR_MARKERS_STORAGE_PREFIX +
+    encodeURIComponent(stableParts.join("|"));
+}
+
+
+function normalizeErrorMarkers(errors) {
+
+  if (!Array.isArray(errors)) return [];
+
+  return errors
+    .map(error => ({
+      page: Math.trunc(Number(error?.page)),
+      x: Number(error?.x),
+      y: Number(error?.y),
+      width: Number(error?.width),
+      height: Number(error?.height),
+      label: String(error?.label || "טעות").trim().slice(0, 200)
+    }))
+    .filter(error =>
+      Number.isInteger(error.page) &&
+      error.page >= 1 &&
+      [error.x, error.y, error.width, error.height].every(Number.isFinite) &&
+      error.width > 0 &&
+      error.height > 0
+    );
+}
+
+
+function loadSavedErrorMarkers(group) {
+
+  try {
+    const raw = localStorage.getItem(
+      errorMarkersStorageKey(group)
+    );
+
+    if (!raw) return [];
+
+    const parsed = JSON.parse(raw);
+    return normalizeErrorMarkers(parsed?.errors);
+
+  } catch (error) {
+    console.error("Could not load saved error markers", error);
+    return [];
+  }
+}
+
+
+function saveErrorMarkers(group, errors) {
+
+  const normalized = normalizeErrorMarkers(errors);
+  const key = errorMarkersStorageKey(group);
+
+  try {
+    if (normalized.length === 0) {
+      localStorage.removeItem(key);
+      return;
+    }
+
+    localStorage.setItem(
+      key,
+      JSON.stringify({
+        version: 1,
+        saved_at: new Date().toISOString(),
+        errors: normalized
+      })
+    );
+
+  } catch (error) {
+    console.error("Could not save error markers", error);
+  }
+}
+
+
 async function getSignedUrlsForGroup(
   group,
   password
@@ -1696,12 +1782,21 @@ function showSubmission(
     submissionFeedback.textContent = savedFeedback;
   }
 
+  let currentErrorMarkers = loadSavedErrorMarkers(group);
+  renderErrorMarkers(currentErrorMarkers);
+
   const closeSubmissionButton =
     viewer.querySelector(
       "#closeSubmission"
     );
 
   const teacherPassword = document.getElementById("teacher_password").value.trim();
+
+  if (currentErrorMarkers.length > 0) {
+    aiCheckStatus.textContent =
+      `נטענו ${currentErrorMarkers.length} סימוני טעויות שנשמרו בדפדפן זה.`;
+    aiCheckStatus.className = "success";
+  }
 
   viewer.querySelector("#previousSubmission").onclick = async () => {
     if (!previousGroup) return;
@@ -1789,7 +1884,7 @@ function showSubmission(
 
         submissionFeedback.textContent = "";
 
-        renderErrorMarkers([]);
+        renderErrorMarkers(currentErrorMarkers);
 
         throw new Error(
           (data.error || "AI check failed") +
@@ -1810,9 +1905,9 @@ function showSubmission(
       const feedbackText =
         data.feedback ?? "";
 
-      renderErrorMarkers(
-        Array.isArray(data.errors) ? data.errors : []
-      );
+      currentErrorMarkers = normalizeErrorMarkers(data.errors);
+      renderErrorMarkers(currentErrorMarkers);
+      saveErrorMarkers(group, currentErrorMarkers);
 
 
       feedbackBox.innerHTML =
@@ -1951,6 +2046,8 @@ function showSubmission(
 
 
     try {
+
+      saveErrorMarkers(group, currentErrorMarkers);
 
       for (const sourceRow of group.rows) {
 
