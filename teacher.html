@@ -260,6 +260,21 @@ button:disabled{cursor:not-allowed;opacity:.62}
 .viewer-nav{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:14px 0}
 .viewer-nav button{color:var(--ink);background:#eef5f7;box-shadow:none}
 
+#submissionFeedback{
+  line-height:1.75;
+  white-space:normal;
+  overflow-wrap:anywhere;
+}
+
+#submissionFeedback .feedback-formula{
+  display:inline-block;
+  direction:ltr;
+  unicode-bidi:isolate;
+  margin:0 .18em;
+  vertical-align:middle;
+  white-space:nowrap;
+}
+
 .work{padding:15px;margin-top:12px;border:1px solid var(--line);border-radius:13px;background:#fff}
 
 table{width:100%;margin-top:15px;border-collapse:collapse;background:#fff;border-radius:12px;overflow:hidden}
@@ -1629,6 +1644,7 @@ function showSubmission(
             class="image-wrap"
             id="pageImageWrap${index + 1}">
             <img
+              crossorigin="anonymous"
               src="${escapeHtml(url)}"
               alt="עמוד ${index + 1}"
             >
@@ -1712,7 +1728,6 @@ function showSubmission(
           min-height:80px;
           border:1px solid #aaa;
           padding:8px;
-          white-space:pre-wrap;
         ">
       </div>
 
@@ -1779,11 +1794,25 @@ function showSubmission(
 
   const savedFeedback = groupFeedbackText(group);
   if (savedFeedback) {
-    submissionFeedback.textContent = savedFeedback;
+    renderFeedbackContent(submissionFeedback, savedFeedback);
   }
+
+  submissionFeedback.addEventListener("input", () => {
+    delete submissionFeedback.dataset.feedbackSource;
+  });
 
   let currentErrorMarkers = loadSavedErrorMarkers(group);
   renderErrorMarkers(currentErrorMarkers);
+
+  const savedMarkersSnapshot = currentErrorMarkers;
+  if (savedMarkersSnapshot.length > 0) {
+    alignErrorMarkersToInk(savedMarkersSnapshot).then(alignedMarkers => {
+      if (currentErrorMarkers !== savedMarkersSnapshot) return;
+      currentErrorMarkers = alignedMarkers;
+      renderErrorMarkers(currentErrorMarkers);
+      saveErrorMarkers(group, currentErrorMarkers);
+    });
+  }
 
   const closeSubmissionButton =
     viewer.querySelector(
@@ -1906,59 +1935,14 @@ function showSubmission(
         data.feedback ?? "";
 
       currentErrorMarkers = normalizeErrorMarkers(data.errors);
+      currentErrorMarkers = await alignErrorMarkersToInk(
+        currentErrorMarkers
+      );
       renderErrorMarkers(currentErrorMarkers);
       saveErrorMarkers(group, currentErrorMarkers);
 
 
-      feedbackBox.innerHTML =
-        feedbackText
-
-        .split(
-          /(\[\[.*?\]\])/g
-        )
-
-        .map(part => {
-
-          if (
-            part.startsWith("[[") &&
-            part.endsWith("]]")
-          ) {
-
-            const formula =
-              part
-                .slice(2, -2)
-                .trim()
-                .replace(
-                  /^\$+|\$+$/g,
-                  ""
-                );
-
-            return `
-              <span
-                dir="ltr"
-                style="display:inline-block;">
-                \\(${escapeHtml(formula)}\\)
-              </span>
-            `;
-          }
-
-          return escapeHtml(
-            part
-          );
-        })
-
-        .join("");
-
-
-      if (
-        window.MathJax
-          ?.typesetPromise
-      ) {
-
-        await MathJax.typesetPromise(
-          [feedbackBox]
-        );
-      }
+      await renderFeedbackContent(feedbackBox, feedbackText);
 
 
       status.textContent =
@@ -2019,10 +2003,15 @@ function showSubmission(
         "submissionScore"
       ).value.trim();
 
-    const feedback =
+    const feedbackElement =
       document.getElementById(
         "submissionFeedback"
-      ).innerText.trim();
+      );
+
+    const feedback = String(
+      feedbackElement.dataset.feedbackSource ??
+      feedbackElement.innerText
+    ).trim();
 
 
     if (
@@ -2139,6 +2128,196 @@ function showSubmission(
 }
 
 
+async function waitForMarkerImage(image) {
+
+  if (image.complete && image.naturalWidth > 0) return true;
+
+  try {
+    await image.decode();
+    return image.naturalWidth > 0;
+  } catch (error) {
+    return false;
+  }
+}
+
+
+function darkPixelIntegral(imageData, width, height) {
+
+  const integral = new Uint32Array((width + 1) * (height + 1));
+  const pixels = imageData.data;
+
+  for (let y = 0; y < height; y += 1) {
+    let rowTotal = 0;
+    const integralRow = (y + 1) * (width + 1);
+    const previousRow = y * (width + 1);
+
+    for (let x = 0; x < width; x += 1) {
+      const pixelIndex = (y * width + x) * 4;
+      const red = pixels[pixelIndex];
+      const green = pixels[pixelIndex + 1];
+      const blue = pixels[pixelIndex + 2];
+      const alpha = pixels[pixelIndex + 3];
+      const luminance =
+        0.2126 * red + 0.7152 * green + 0.0722 * blue;
+      const colourRange =
+        Math.max(red, green, blue) - Math.min(red, green, blue);
+
+      const isDarkInk =
+        alpha > 20 &&
+        luminance < 135 &&
+        (colourRange < 75 || luminance < 85);
+
+      if (isDarkInk) rowTotal += 1;
+
+      integral[integralRow + x + 1] =
+        integral[previousRow + x + 1] + rowTotal;
+    }
+  }
+
+  return integral;
+}
+
+
+function darkInkDensity(integral, imageWidth, x, y, width, height) {
+
+  const stride = imageWidth + 1;
+  const left = Math.max(0, Math.min(imageWidth - 1, Math.round(x)));
+  const top = Math.max(0, Math.min((integral.length / stride) - 2, Math.round(y)));
+  const right = Math.max(left + 1, Math.min(imageWidth, Math.round(x + width)));
+  const bottom = Math.max(
+    top + 1,
+    Math.min((integral.length / stride) - 1, Math.round(y + height))
+  );
+
+  const count =
+    integral[bottom * stride + right] -
+    integral[top * stride + right] -
+    integral[bottom * stride + left] +
+    integral[top * stride + left];
+
+  return count / ((right - left) * (bottom - top));
+}
+
+
+async function alignErrorMarkerToInk(error) {
+
+  const wrap = document.getElementById(
+    "pageImageWrap" + Math.trunc(Number(error.page))
+  );
+  const image = wrap?.querySelector("img");
+
+  if (!image || !(await waitForMarkerImage(image))) return error;
+
+  const maximumDimension = 1200;
+  const scale = Math.min(
+    1,
+    maximumDimension / Math.max(image.naturalWidth, image.naturalHeight)
+  );
+  const imageWidth = Math.max(1, Math.round(image.naturalWidth * scale));
+  const imageHeight = Math.max(1, Math.round(image.naturalHeight * scale));
+  const canvas = document.createElement("canvas");
+  canvas.width = imageWidth;
+  canvas.height = imageHeight;
+
+  const context = canvas.getContext("2d", { willReadFrequently: true });
+  if (!context) return error;
+
+  try {
+    context.drawImage(image, 0, 0, imageWidth, imageHeight);
+    const imageData = context.getImageData(0, 0, imageWidth, imageHeight);
+    const integral = darkPixelIntegral(imageData, imageWidth, imageHeight);
+
+    const boxWidth = Math.max(12, imageWidth * error.width / 100);
+    const boxHeight = Math.max(12, imageHeight * error.height / 100);
+    const originalX = imageWidth * error.x / 100;
+    const originalY = imageHeight * error.y / 100;
+    const originalDensity = darkInkDensity(
+      integral,
+      imageWidth,
+      originalX,
+      originalY,
+      boxWidth,
+      boxHeight
+    );
+
+    // A frame that already covers handwriting should not be moved.
+    if (originalDensity >= 0.018) return error;
+
+    let best = {
+      x: error.x,
+      y: error.y,
+      density: originalDensity,
+      value: originalDensity
+    };
+
+    for (let deltaY = -18; deltaY <= 18; deltaY += 2) {
+      for (let deltaX = -14; deltaX <= 14; deltaX += 2) {
+        const candidateX = Math.max(
+          0,
+          Math.min(100 - error.width, error.x + deltaX)
+        );
+        const candidateY = Math.max(
+          0,
+          Math.min(100 - error.height, error.y + deltaY)
+        );
+        const density = darkInkDensity(
+          integral,
+          imageWidth,
+          imageWidth * candidateX / 100,
+          imageHeight * candidateY / 100,
+          boxWidth,
+          boxHeight
+        );
+        const distancePenalty =
+          0.00022 * (Math.abs(deltaX) + Math.abs(deltaY));
+        const value = density - distancePenalty;
+
+        if (value > best.value) {
+          best = {
+            x: candidateX,
+            y: candidateY,
+            density,
+            value
+          };
+        }
+      }
+    }
+
+    const clearlyBetter =
+      best.density >= 0.014 &&
+      best.density >= originalDensity * 1.7 + 0.003;
+
+    if (!clearlyBetter) return error;
+
+    return {
+      ...error,
+      x: best.x,
+      y: best.y
+    };
+
+  } catch (errorReadingImage) {
+    console.warn(
+      "Could not automatically align an error marker",
+      errorReadingImage
+    );
+    return error;
+  }
+}
+
+
+async function alignErrorMarkersToInk(errors) {
+
+  const normalized = normalizeErrorMarkers(errors);
+  const aligned = [];
+
+  for (const error of normalized) {
+    aligned.push(await alignErrorMarkerToInk(error));
+  }
+
+  return aligned;
+}
+
+
 function renderErrorMarkers(errors) {
 
   document.querySelectorAll(
@@ -2180,6 +2359,39 @@ function renderErrorMarkers(errors) {
   }
 }
 
+
+
+async function renderFeedbackContent(feedbackBox, feedbackText) {
+
+  const source = String(feedbackText ?? "").trim();
+  feedbackBox.dataset.feedbackSource = source;
+
+  feedbackBox.innerHTML = source
+    .split(/(\[\[[\s\S]*?\]\])/g)
+    .map(part => {
+      if (
+        part.startsWith("[[") &&
+        part.endsWith("]]")
+      ) {
+        const formula = part
+          .slice(2, -2)
+          .trim()
+          .replace(/^\$+|\$+$/g, "");
+
+        return `<span class="feedback-formula" dir="ltr">\\(${escapeHtml(formula)}\\)</span>`;
+      }
+
+      return escapeHtml(
+        part.replace(/\s+/g, " ")
+      );
+    })
+    .join("")
+    .trim();
+
+  if (window.MathJax?.typesetPromise) {
+    await MathJax.typesetPromise([feedbackBox]);
+  }
+}
 
 
 function escapeHtml(value) {
