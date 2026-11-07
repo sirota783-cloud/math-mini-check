@@ -1578,6 +1578,153 @@ def teacher_exam_upload():
         print("EXAM UPLOAD ERROR:", e)
         return jsonify(error=str(e)), 500
 
+# ==========================================================
+# TEACHER: COURSE CATALOG AND SAFE SUBMISSION CLEANUP
+# Paste above the existing '# START' block in app.py.
+# Requires mini_check_courses created with setup_courses.sql.
+# ==========================================================
+
+import re
+
+@app.get('/courses')
+def course_catalog():
+    try:
+        data = (sb.table('mini_check_courses')
+                .select('course_id,display_name')
+                .eq('active', True)
+                .order('course_id').execute().data)
+        return jsonify(courses=data)
+    except Exception as error:
+        print('COURSE LIST ERROR:', repr(error), flush=True)
+        return jsonify(error='Course catalog not available'), 503
+
+
+@app.post('/teacher/courses/manage')
+def manage_courses():
+    data = request.get_json(silent=True) or {}
+    if not teacher_password_ok(str(data.get('teacher_password', '')).strip()):
+        return jsonify(error='Invalid teacher password'), 403
+
+    course_id = str(data.get('course_id', '')).strip().upper()
+    name = str(data.get('display_name', '')).strip()
+    if not re.fullmatch(r'[A-Z][A-Z0-9_-]{1,23}', course_id):
+        return jsonify(error='Course code must contain 2-24 Latin letters, digits, - or _'), 400
+    if course_id in ('ALL', 'GENERAL') or not 4 <= len(name) <= 120:
+        return jsonify(error='Invalid course code or name'), 400
+    try:
+        existing = (sb.table('mini_check_courses').select('course_id')
+                    .eq('course_id', course_id).limit(1).execute().data)
+        if existing:
+            return jsonify(error='Course code already exists'), 409
+        row = (sb.table('mini_check_courses').insert({
+            'course_id': course_id, 'display_name': name, 'active': True
+        }).execute().data)
+        return jsonify(ok=True, course=(row[0] if row else {
+            'course_id': course_id, 'display_name': name
+        }))
+    except Exception as error:
+        print('CREATE COURSE ERROR:', repr(error), flush=True)
+        return jsonify(error='Could not save course'), 500
+
+
+def _teacher_matching_submissions(course_id, quiz_id):
+    """Select only v2 records for exactly one course; never touch legacy records."""
+    matches = []
+    offset = 0
+    while True:
+        batch = (sb.table('mini_check_submissions')
+                 .select('id,quiz_id,file_path')
+                 .like('quiz_id', 'v2::' + course_id + '::%')
+                 .order('id').range(offset, offset + 499).execute().data)
+        for row in batch:
+            parts = split_quiz_key(row.get('quiz_id'))
+            if parts.get('course_id') != course_id:
+                continue
+            if quiz_id != 'ALL' and parts.get('quiz_id') != quiz_id:
+                continue
+            matches.append(row)
+        if len(batch) < 500:
+            break
+        offset += 500
+        if offset > 10000:
+            raise ValueError('Too many records: narrow the selection')
+    return matches
+
+
+@app.post('/teacher/submissions/manage')
+def teacher_manage_submissions():
+    data = request.get_json(silent=True) or {}
+    if not teacher_password_ok(str(data.get('teacher_password', '')).strip()):
+        return jsonify(error='Invalid teacher password'), 403
+    course_id = str(data.get('course_id', '')).strip().upper()
+    quiz_id = str(data.get('quiz_id', 'ALL')).strip()
+    action = str(data.get('action', 'preview')).strip()
+
+    # There is deliberately no unrestricted 'delete everything' operation.
+    if not re.fullmatch(r'[A-Z][A-Z0-9_-]{1,23}', course_id):
+        return jsonify(error='Select a specific course'), 400
+    if quiz_id != 'ALL' and not re.fullmatch(r'[A-Za-z0-9_-]{1,30}', quiz_id):
+        return jsonify(error='Invalid quiz number'), 400
+    if action not in ('preview', 'delete'):
+        return jsonify(error='Unknown action'), 400
+    try:
+        rows = _teacher_matching_submissions(course_id, quiz_id)
+    except Exception as error:
+        print('PREVIEW SUBMISSIONS ERROR:', repr(error), flush=True)
+        return jsonify(error='Could not inspect works'), 500
+
+    count = len(rows)
+    if action == 'preview':
+        return jsonify(ok=True, count=count, course_id=course_id, quiz_id=quiz_id)
+    if count == 0:
+        return jsonify(error='No works to delete'), 409
+    expected = data.get('expected_count')
+    if not isinstance(expected, int) or expected != count:
+        return jsonify(error='Work count changed: preview again'), 409
+    target = course_id + '/' + quiz_id
+    if data.get('confirmation') != 'DELETE ' + target:
+        return jsonify(error='Explicit deletion confirmation required'), 400
+
+    # Remove only the selected submissions and associated AI events.
+    # Student registrations, rubrics and handwriting samples remain untouched.
+    ids = [row['id'] for row in rows]
+    try:
+        for start in range(0, len(ids), 100):
+            subset = ids[start:start + 100]
+            sb.table('mini_check_ai_events').delete().in_(
+                'submission_id', subset).execute()
+            sb.table('mini_check_submissions').delete().in_(
+                'id', subset).execute()
+    except Exception as error:
+        print('DELETE WORKS ERROR:', repr(error), flush=True)
+        return jsonify(error='Deletion failed or incomplete; refresh and inspect'), 500
+
+    # Clean up file objects after successful database deletion.
+    paths = set()
+    for row in rows:
+        raw = row.get('file_path') or ''
+        if isinstance(raw, list):
+            items = raw
+        else:
+            try:
+                parsed = json.loads(str(raw))
+                items = parsed if isinstance(parsed, list) else [parsed]
+            except Exception:
+                items = [raw]
+        for item in items:
+            if isinstance(item, str) and item.strip():
+                paths.add(item.strip())
+    warnings = []
+    try:
+        ordered = sorted(paths)
+        for start in range(0, len(ordered), 100):
+            sb.storage.from_('mini-check-files').remove(ordered[start:start + 100])
+    except Exception as error:
+        print('STORAGE CLEANUP ERROR:', repr(error), flush=True)
+        warnings.append('Database records deleted, but some uploaded files may remain in Storage')
+
+    return jsonify(ok=True, deleted=count, warnings=warnings)
+
 
 # ==========================================================
 # START
